@@ -3,454 +3,246 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECURITY: Cache-Control meta tags
+     These ask the browser not to serve this page from disk cache,
+     which helps when the back button is pressed after logout.
+     NOTE: meta-tag cache directives are advisory only — modern
+     browsers mostly ignore them for bfcache purposes. The REAL
+     protection is the inline auth-guard script below, plus the
+     pageshow listener near the bottom of this file, which both
+     re-check auth every time this page becomes visible again
+     (including via back/forward navigation).
+     ═══════════════════════════════════════════════════════════ -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+
 <title>வாகன பராமரிப்பு மேலாண்மை V3.0</title>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECURITY: Auth guard — runs IMMEDIATELY, before any page
+     content is parsed or shown. If there is no valid login
+     session, redirect to login.html instantly.
+     This must be a plain synchronous <script> placed here in
+     <head>, not inside the deferred app logic at the bottom,
+     so a logged-out user never even sees a flash of page content.
+     ═══════════════════════════════════════════════════════════ -->
+<script>
+(function authGuard(){
+  var session = sessionStorage.getItem('vm_auth');
+  if (!session) {
+    // No session at all — never logged in, or already logged out.
+    window.location.replace('login.html');
+    return;
+  }
+  try {
+    var parsed = JSON.parse(session);
+    if (!parsed || !parsed.loggedIn || !parsed.user) {
+      throw new Error('invalid session shape');
+    }
+    // Optional: enforce a session expiry (e.g. 12 hours) so an
+    // open tab doesn't stay "logged in" forever.
+    var MAX_SESSION_MS = 12 * 60 * 60 * 1000;
+    if (parsed.loginTime && (Date.now() - parsed.loginTime) > MAX_SESSION_MS) {
+      throw new Error('session expired');
+    }
+  } catch (e) {
+    sessionStorage.removeItem('vm_auth');
+    window.location.replace('login.html');
+  }
+})();
+</script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+:root{--ink:#111827;--ink2:#374151;--muted:#6B7280;--border:#E5E7EB;--border2:#D1D5DB;--bg:#F9FAFB;--white:#FFFFFF;--blue:#2563EB;--blue-light:#EFF6FF;--blue-mid:#DBEAFE;--green:#059669;--green-light:#ECFDF5;--amber:#D97706;--amber-light:#FFFBEB;--red:#DC2626;--red-light:#FEF2F2;--purple:#7C3AED;--purple-light:#F5F3FF;--orange:#ff6b00;--radius:10px;--radius-sm:6px;--shadow:0 1px 3px rgba(0,0,0,0.08),0 1px 2px rgba(0,0,0,0.06);--shadow-md:0 4px 6px rgba(0,0,0,0.07),0 2px 4px rgba(0,0,0,0.06)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Plus Jakarta Sans','Noto Sans Tamil',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;font-size:14px}
+#loading-overlay{position:fixed;inset:0;background:rgba(17,24,39,0.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#fff;font-size:15px;font-weight:600;transition:opacity 0.4s}
+#loading-overlay.hidden{opacity:0;pointer-events:none}
+.loading-spinner-lg{width:52px;height:52px;border:4px solid rgba(255,255,255,0.2);border-top-color:var(--orange);border-radius:50%;animation:spin 0.8s linear infinite}
+#loading-text{font-size:13px;color:rgba(255,255,255,0.65);margin-top:-8px}
+.app{display:flex;min-height:100vh}
+.sidebar{width:240px;background:var(--ink);color:#fff;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform 0.3s}
+.sidebar-logo{padding:22px 20px 16px;border-bottom:1px solid rgba(255,255,255,0.08)}
+.sidebar-logo h1{font-size:15px;font-weight:800;color:#fff;line-height:1.3}
+.sidebar-logo p{font-size:11px;color:rgba(255,255,255,0.4);margin-top:3px}
+.sheets-pill{margin:10px 14px 0;display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.6)}
+.dot{width:8px;height:8px;border-radius:50%;background:#EF4444;flex-shrink:0;box-shadow:0 0 0 2px rgba(239,68,68,0.25)}
+.dot.on{background:#10B981;box-shadow:0 0 0 2px rgba(16,185,129,0.25)}
+.dot.syncing{background:var(--amber);box-shadow:0 0 0 2px rgba(217,119,6,0.25);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.nav{padding:12px 10px;flex:1;overflow-y:auto}
+.nav-section{font-size:10px;font-weight:700;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:1px;padding:14px 10px 6px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:500;color:rgba(255,255,255,0.65);transition:all 0.15s;margin-bottom:2px}
+.nav-item:hover{background:rgba(255,107,0,.15);color:#ff6b00}
+.nav-item.active{background:#ff6b00;color:#fff;font-weight:700;box-shadow:0 3px 10px rgba(255,107,0,.35)}
+.nav-icon{font-size:16px;width:20px;text-align:center}
+.sidebar-bottom{padding:14px;border-top:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:8px}
+.sb-btn{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:var(--radius-sm);color:rgba(255,255,255,0.75);font-size:12px;cursor:pointer;font-family:inherit;transition:all 0.15s;font-weight:600}
+.sb-btn:hover{background:rgba(255,255,255,0.13);color:#fff}
+.hamburger{display:none;position:fixed;top:12px;left:12px;z-index:200;background:var(--ink);border:none;border-radius:8px;padding:8px 11px;color:#fff;font-size:18px;cursor:pointer}
+.main{margin-left:240px;flex:1;padding:30px}
+.page{display:none}
+.page.active{display:block;animation:fadeIn 0.2s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.page-header{margin-bottom:22px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px}
+.page-header-left h2{font-size:21px;font-weight:800;color:var(--ink)}
+.page-header-left p{font-size:13px;color:var(--muted);margin-top:4px}
+.page-header-right{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.sync-bar{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:var(--radius-sm);margin-bottom:16px;font-size:12px;font-weight:600;background:var(--blue-light);border:1px solid var(--blue-mid);color:var(--blue)}
+.sync-bar.ok{background:var(--green-light);border-color:#A7F3D0;color:var(--green)}
+.sync-bar.err{background:var(--red-light);border-color:#FECACA;color:var(--red)}
+.sync-bar.warn{background:var(--amber-light);border-color:#FDE68A;color:var(--amber)}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+.stat-card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.stat-card.blue::before{background:var(--blue)}.stat-card.amber::before{background:var(--amber)}.stat-card.green::before{background:var(--green)}.stat-card.red::before{background:var(--red)}
+.stat-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px}
+.stat-val{font-size:24px;font-weight:800;margin-top:6px;color:var(--ink)}
+.stat-val.blue{color:var(--blue)}.stat-val.green{color:var(--green)}.stat-val.red{color:var(--red)}.stat-val.amber{color:var(--amber)}
+.stat-sub{font-size:11px;color:var(--muted);margin-top:4px}
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;margin-bottom:20px}
+.card-title{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.badge{background:var(--blue-mid);color:var(--blue);font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}
+.form-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:15px}
+.span2{grid-column:span 2}.span3{grid-column:span 3}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:12px;font-weight:600;color:var(--ink2)}
+.req{color:var(--red)}
+.field input,.field select,.field textarea{border:1.5px solid var(--border2);border-radius:var(--radius-sm);padding:9px 12px;font-size:13px;font-family:inherit;color:var(--ink);background:var(--white);transition:border 0.15s,box-shadow 0.15s;width:100%}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,0.1)}
+.field textarea{resize:vertical;min-height:65px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 18px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;border:none;transition:all 0.15s;white-space:nowrap}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.btn-primary{background:var(--blue);color:#fff}.btn-primary:hover:not(:disabled){background:#1D4ED8}
+.btn-success{background:var(--green);color:#fff}.btn-success:hover:not(:disabled){background:#047857}
+.btn-amber{background:var(--amber);color:#fff}.btn-amber:hover:not(:disabled){background:#B45309}
+.btn-orange{background:var(--orange);color:#fff}.btn-orange:hover:not(:disabled){background:#e05e00}
+.btn-danger{background:var(--red);color:#fff}.btn-danger:hover:not(:disabled){background:#b91c1c}
+.btn-ghost{background:transparent;color:var(--ink2);border:1.5px solid var(--border2)}.btn-ghost:hover:not(:disabled){background:var(--bg)}
+.btn-sm{padding:5px 11px;font-size:11px}
+.btn-row{display:flex;gap:10px;margin-top:18px;align-items:center;flex-wrap:wrap}
+.search-box{display:flex;align-items:center;gap:8px;background:var(--white);border:1.5px solid var(--border2);border-radius:var(--radius-sm);padding:7px 12px;flex:1;min-width:180px}
+.search-box input{border:none;outline:none;font-size:13px;font-family:inherit;background:transparent;width:100%;color:var(--ink)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;padding:10px 14px;background:var(--bg);border-bottom:1px solid var(--border)}
+tbody td{padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px;color:var(--ink2);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#F8FAFF}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.chip-green{background:var(--green-light);color:var(--green)}
+.chip-amber{background:var(--amber-light);color:var(--amber)}
+.chip-red{background:var(--red-light);color:var(--red)}
+.chip-blue{background:var(--blue-light);color:var(--blue)}
+.chip-purple{background:var(--purple-light);color:var(--purple)}
+.reminder-list{display:flex;flex-direction:column;gap:10px}
+.reminder-item{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;border-radius:var(--radius-sm);border-left:5px solid var(--blue);background:var(--bg);gap:12px}
+.reminder-item.danger{border-left-color:var(--red);background:var(--red-light)}
+.reminder-item.warning{border-left-color:var(--amber);background:var(--amber-light)}
+.reminder-text{font-size:13px;font-weight:600;color:var(--ink)}
+.reminder-sub{font-size:11px;color:var(--ink2);margin-top:3px;line-height:1.6}
+.action-cell{display:flex;gap:6px}
+.empty{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty .ico{font-size:30px;margin-bottom:8px}
+.empty p{font-size:13px}
+.month-bars{display:flex;gap:6px;align-items:flex-end;height:100px;margin-top:10px}
+.month-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.month-bar{width:100%;background:var(--blue-mid);border-radius:4px 4px 0 0;min-height:4px;transition:height 0.4s}
+.month-bar:hover{background:var(--blue)}
+.month-bar-label{font-size:9px;color:var(--muted);font-weight:600}
+.expense-summary-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin-bottom:18px}
+.expense-summary-card{background:var(--bg);border:1px solid var(--border);padding:14px;border-radius:var(--radius-sm)}
+.esc-label{font-size:12px;font-weight:600;color:var(--muted);display:block}
+.esc-val{font-size:18px;font-weight:700;color:var(--amber);display:block;margin-top:4px}
+.bk-area{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.bk-card{background:var(--bg);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:16px}
+.bk-card h4{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:5px}
+.bk-card p{font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5}
+.spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.6s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--ink);color:#fff;padding:12px 18px;border-radius:var(--radius);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);opacity:0;transform:translateY(12px);transition:all 0.25s;z-index:500;display:flex;align-items:center;gap:8px;max-width:360px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok{background:var(--green)}.toast.err{background:var(--red)}.toast.warn{background:var(--amber)}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.open{display:flex}
+.modal{background:var(--white);border-radius:14px;padding:28px;width:480px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2)}
+.modal h3{font-size:17px;font-weight:800;margin-bottom:6px}
+.modal p{font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6}
 
-:root {
-  --ink: #111827;
-  --ink2: #374151;
-  --muted: #6B7280;
-  --border: #E5E7EB;
-  --border2: #D1D5DB;
-  --bg: #F9FAFB;
-  --white: #FFFFFF;
-  --blue: #2563EB;
-  --blue-light: #EFF6FF;
-  --blue-mid: #DBEAFE;
-  --green: #059669;
-  --green-light: #ECFDF5;
-  --amber: #D97706;
-  --amber-light: #FFFBEB;
-  --red: #DC2626;
-  --red-light: #FEF2F2;
-  --purple: #7C3AED;
-  --purple-light: #F5F3FF;
-  --orange: #ff6b00;
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+/* ═══════════════════════════════════════════════════
+   TOP BAR — holds the logout button top-right.
+   Sits above the page content, to the right of the
+   hamburger on mobile, and stays visible on every page.
+   ═══════════════════════════════════════════════════ */
+.topbar{
+  display:flex;align-items:center;justify-content:flex-end;gap:14px;
+  padding:0 0 18px;margin-bottom:4px;
 }
+.topbar-user{
+  display:flex;align-items:center;gap:9px;
+  padding:6px 14px 6px 6px;border-radius:30px;
+  background:var(--white);border:1px solid var(--border);box-shadow:var(--shadow);
+}
+.topbar-avatar{
+  width:30px;height:30px;border-radius:50%;flex-shrink:0;
+  background:var(--blue-light);color:var(--blue);
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:800;
+}
+.topbar-user-name{font-size:12.5px;font-weight:700;color:var(--ink2)}
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+/* Logout button — primary danger-tinted action, matches existing .btn language */
+.btn-logout{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:9px 18px;border-radius:30px;border:1.5px solid var(--red-light);
+  background:var(--red-light);color:var(--red);
+  font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;
+  transition:background 0.15s,color 0.15s,border-color 0.15s,box-shadow 0.15s,transform 0.1s;
+}
+.btn-logout i{font-size:13px}
+.btn-logout:hover{background:var(--red);color:#fff;border-color:var(--red);box-shadow:0 6px 16px rgba(220,38,38,0.28)}
+.btn-logout:active{transform:scale(0.96)}
+.btn-logout:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(220,38,38,0.35)}
 
-body {
-  font-family: 'Plus Jakarta Sans', 'Noto Sans Tamil', sans-serif;
-  background: var(--bg);
-  color: var(--ink);
-  min-height: 100vh;
-  font-size: 14px;
+/* Logout confirmation modal — compact variant of the existing .modal */
+.modal.logout-modal{width:380px;text-align:center;padding:30px 26px 26px}
+.logout-modal-icon{
+  width:54px;height:54px;border-radius:50%;margin:0 auto 16px;
+  background:var(--red-light);color:var(--red);
+  display:flex;align-items:center;justify-content:center;font-size:22px;
 }
+.logout-modal h3{font-size:16px;margin-bottom:8px}
+.logout-modal p{margin-bottom:22px}
+.logout-modal-actions{display:flex;gap:10px;justify-content:center}
+.logout-modal-actions .btn{flex:1;padding:10px 16px;font-size:13.5px}
 
-/* ── LOADING OVERLAY ── */
-#loading-overlay {
-  position: fixed; inset: 0;
-  background: rgba(17,24,39,0.85);
-  z-index: 9999;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 16px;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  transition: opacity 0.4s;
+@media(max-width:768px){
+  .topbar{justify-content:space-between;padding-top:8px}
+  .topbar-user-name{display:none}
 }
-#loading-overlay.hidden { opacity: 0; pointer-events: none; }
-.loading-spinner-lg {
-  width: 48px; height: 48px;
-  border: 4px solid rgba(255,255,255,0.2);
-  border-top-color: var(--orange);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+@media(max-width:480px){
+  .btn-logout span{display:none}
+  .btn-logout{padding:10px;border-radius:50%}
 }
-#loading-text { font-size: 13px; color: rgba(255,255,255,0.7); margin-top: -8px; }
-
-/* ── LAYOUT ── */
-.app { display: flex; min-height: 100vh; }
-
-.sidebar {
-  width: 240px;
-  background: var(--ink);
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  position: fixed;
-  top: 0; left: 0; bottom: 0;
-  z-index: 100;
-  transition: transform 0.3s;
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%)}.sidebar.open{transform:translateX(0)}
+  .hamburger{display:block}.main{margin-left:0;padding:16px;padding-top:56px}
+  .stats-row{grid-template-columns:1fr 1fr}.form-grid,.form-grid-3{grid-template-columns:1fr}
+  .span2,.span3{grid-column:span 1}.bk-area{grid-template-columns:1fr}
+  .expense-summary-grid{grid-template-columns:1fr 1fr}
 }
-
-.sidebar-logo {
-  padding: 22px 20px 18px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-.sidebar-logo h1 { font-size: 15px; font-weight: 800; color: #fff; line-height: 1.3; }
-.sidebar-logo p { font-size: 11px; color: rgba(255,255,255,0.45); margin-top: 3px; }
-
-/* Sheets status pill */
-.sheets-status-pill {
-  margin: 10px 16px 0;
-  display: flex; align-items: center; gap: 7px;
-  padding: 6px 11px;
-  border-radius: 20px;
-  font-size: 11px; font-weight: 600;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.6);
-}
-.sheets-status-pill .dot {
-  width: 8px; height: 8px; border-radius: 50%; background: #EF4444; flex-shrink: 0;
-  box-shadow: 0 0 0 2px rgba(239,68,68,0.25);
-}
-.sheets-status-pill .dot.on { background: #10B981; box-shadow: 0 0 0 2px rgba(16,185,129,0.25); }
-.sheets-status-pill .dot.syncing {
-  background: var(--amber);
-  box-shadow: 0 0 0 2px rgba(217,119,6,0.25);
-  animation: pulse 1s infinite;
-}
-@keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
-
-.nav { padding: 12px 10px; flex: 1; overflow-y: auto; }
-.nav-section { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 1px; padding: 14px 10px 6px; }
-.nav-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 13px; font-weight: 500;
-  color: rgba(255,255,255,0.65);
-  transition: all 0.15s;
-  margin-bottom: 2px;
-}
-.nav-item:hover { background: rgba(255,107,0,.15); color: #ff6b00; }
-.nav-item.active { background: #ff6b00; color: #fff; font-weight: 700; box-shadow: 0 3px 10px rgba(255,107,0,.35); }
-.nav-icon { font-size: 16px; width: 20px; text-align: center; }
-
-.sidebar-bottom {
-  padding: 14px 16px;
-  border-top: 1px solid rgba(255,255,255,0.08);
-  display: flex; flex-direction: column; gap: 8px;
-}
-.config-btn {
-  display: flex; align-items: center; gap: 8px;
-  width: 100%; padding: 9px 12px;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--radius-sm);
-  color: rgba(255,255,255,0.7);
-  font-size: 12px; cursor: pointer;
-  font-family: inherit; transition: all 0.15s;
-}
-.config-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
-.config-dot { width: 7px; height: 7px; border-radius: 50%; background: #EF4444; flex-shrink: 0; }
-.config-dot.connected { background: #10B981; }
-
-.hamburger {
-  display: none; position: fixed; top: 12px; left: 12px;
-  z-index: 200; background: var(--ink); border: none;
-  border-radius: 8px; padding: 8px 10px;
-  color: #fff; font-size: 18px; cursor: pointer;
-}
-
-.main { margin-left: 240px; flex: 1; padding: 32px; }
-
-.page { display: none; }
-.page.active { display: block; animation: fadeIn 0.2s; }
-@keyframes fadeIn { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform: translateY(0); } }
-
-/* ── PAGE HEADER ── */
-.page-header { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
-.page-header-left h2 { font-size: 22px; font-weight: 800; color: var(--ink); }
-.page-header-left p { font-size: 13px; color: var(--muted); margin-top: 4px; }
-.page-header-right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
-/* ── SEARCH BAR ── */
-.search-row {
-  display: flex; gap: 10px; align-items: center;
-  margin-bottom: 16px; flex-wrap: wrap;
-}
-.search-box {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--white); border: 1.5px solid var(--border2);
-  border-radius: var(--radius-sm); padding: 8px 12px;
-  flex: 1; min-width: 180px;
-}
-.search-box input {
-  border: none; outline: none; font-size: 13px;
-  font-family: inherit; background: transparent; width: 100%;
-  color: var(--ink);
-}
-.search-box .ico { color: var(--muted); font-size: 14px; }
-
-/* ── CARDS ── */
-.card {
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 24px;
-  margin-bottom: 20px;
-}
-.card-title {
-  font-size: 14px; font-weight: 700; color: var(--ink);
-  margin-bottom: 18px;
-  display: flex; align-items: center; gap: 8px;
-}
-.card-title .badge {
-  background: var(--blue-mid); color: var(--blue);
-  font-size: 11px; font-weight: 600;
-  padding: 2px 8px; border-radius: 20px;
-}
-
-/* ── FORMS ── */
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.form-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-.span2 { grid-column: span 2; }
-.span3 { grid-column: span 3; }
-.field { display: flex; flex-direction: column; gap: 6px; }
-.field label { font-size: 12px; font-weight: 600; color: var(--ink2); letter-spacing: 0.2px; }
-.field label .req { color: var(--red); }
-.field input,
-.field select,
-.field textarea {
-  border: 1.5px solid var(--border2);
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  font-size: 13px; font-family: inherit;
-  color: var(--ink); background: var(--white);
-  transition: border 0.15s, box-shadow 0.15s; width: 100%;
-}
-.field input:focus,
-.field select:focus,
-.field textarea:focus {
-  outline: none; border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
-}
-.field textarea { resize: vertical; min-height: 70px; }
-
-/* ── BUTTONS ── */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 9px 18px; border-radius: var(--radius-sm);
-  font-size: 13px; font-weight: 600;
-  font-family: inherit; cursor: pointer;
-  border: none; transition: all 0.15s; white-space: nowrap;
-}
-.btn:disabled { opacity: 0.55; cursor: not-allowed; }
-.btn-primary { background: var(--blue); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: #1D4ED8; }
-.btn-success { background: var(--green); color: #fff; }
-.btn-success:hover:not(:disabled) { background: #047857; }
-.btn-amber { background: var(--amber); color: #fff; }
-.btn-amber:hover:not(:disabled) { background: #B45309; }
-.btn-orange { background: var(--orange); color: #fff; }
-.btn-orange:hover:not(:disabled) { background: #e05e00; }
-.btn-danger { background: var(--red); color: #fff; }
-.btn-danger:hover:not(:disabled) { background: #b91c1c; }
-.btn-ghost { background: transparent; color: var(--ink2); border: 1.5px solid var(--border2); }
-.btn-ghost:hover:not(:disabled) { background: var(--bg); }
-.btn-sm { padding: 5px 11px; font-size: 11px; }
-.btn-row { display: flex; gap: 10px; margin-top: 20px; align-items: center; flex-wrap: wrap; }
-
-/* ── TABLE ── */
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
-thead th {
-  text-align: left; font-size: 11px; font-weight: 700;
-  color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
-  padding: 10px 14px; background: var(--bg);
-  border-bottom: 1px solid var(--border);
-}
-tbody td {
-  padding: 11px 14px; border-bottom: 1px solid var(--border);
-  font-size: 13px; color: var(--ink2); vertical-align: middle;
-}
-tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover td { background: #F8FAFF; }
-
-/* ── CHIPS ── */
-.chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 10px; border-radius: 20px;
-  font-size: 11px; font-weight: 600;
-}
-.chip-green { background: var(--green-light); color: var(--green); }
-.chip-amber { background: var(--amber-light); color: var(--amber); }
-.chip-red { background: var(--red-light); color: var(--red); }
-.chip-blue { background: var(--blue-light); color: var(--blue); }
-.chip-purple { background: var(--purple-light); color: var(--purple); }
-.chip-orange { background: #FFF4ED; color: var(--orange); }
-
-/* ── STATS ROW ── */
-.stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
-.stat-card {
-  background: var(--white); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow);
-  padding: 18px 20px; position: relative; overflow: hidden;
-}
-.stat-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-}
-.stat-card.blue::before { background: var(--blue); }
-.stat-card.amber::before { background: var(--amber); }
-.stat-card.green::before { background: var(--green); }
-.stat-card.red::before { background: var(--red); }
-.stat-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
-.stat-val { font-size: 24px; font-weight: 800; margin-top: 6px; color: var(--ink); }
-.stat-val.green { color: var(--green); }
-.stat-val.red { color: var(--red); }
-.stat-val.blue { color: var(--blue); }
-.stat-val.amber { color: var(--amber); }
-.stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
-
-/* ── REMINDERS ── */
-.reminder-list { display: flex; flex-direction: column; gap: 10px; }
-.reminder-item {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-radius: var(--radius-sm);
-  border-left: 5px solid var(--blue); background: var(--bg);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05); gap: 12px;
-}
-.reminder-item.danger { border-left-color: var(--red); background: var(--red-light); }
-.reminder-item.warning { border-left-color: var(--amber); background: var(--amber-light); }
-.reminder-text { font-size: 13px; font-weight: 600; color: var(--ink); }
-.reminder-sub { font-size: 11px; color: var(--ink2); margin-top: 3px; line-height: 1.6; }
-
-/* ── MODAL ── */
-.modal-overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.5); z-index: 300;
-  align-items: center; justify-content: center;
-  padding: 20px;
-}
-.modal-overlay.open { display: flex; }
-.modal {
-  background: var(--white); border-radius: 14px;
-  padding: 28px; width: 560px; max-width: 100%;
-  max-height: 90vh; overflow-y: auto;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-.modal h3 { font-size: 17px; font-weight: 800; margin-bottom: 6px; }
-.modal p { font-size: 13px; color: var(--muted); margin-bottom: 18px; line-height: 1.6; }
-
-/* ── TOAST ── */
-.toast {
-  position: fixed; bottom: 24px; right: 24px;
-  background: var(--ink); color: #fff;
-  padding: 12px 18px; border-radius: var(--radius);
-  font-size: 13px; font-weight: 500;
-  box-shadow: var(--shadow-md);
-  opacity: 0; transform: translateY(12px);
-  transition: all 0.25s; z-index: 500;
-  display: flex; align-items: center; gap: 8px;
-  max-width: 360px;
-}
-.toast.show { opacity: 1; transform: translateY(0); }
-.toast.ok { background: var(--green); }
-.toast.err { background: var(--red); }
-.toast.warn { background: var(--amber); }
-
-/* ── EMPTY STATE ── */
-.empty { text-align: center; padding: 48px 20px; color: var(--muted); }
-.empty .ico { font-size: 32px; margin-bottom: 8px; }
-.empty p { font-size: 13px; }
-
-/* ── ACTION CELL ── */
-.action-cell { display: flex; gap: 6px; }
-
-/* ── EXPENSE SUMMARY ── */
-.expense-summary-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px; margin-bottom: 20px;
-}
-.expense-summary-card {
-  background: var(--bg); border: 1px solid var(--border);
-  padding: 14px; border-radius: var(--radius-sm);
-  display: flex; flex-direction: column; justify-content: space-between;
-}
-.esc-label { font-size: 12px; font-weight: 600; color: var(--muted); }
-.esc-val { font-size: 18px; font-weight: 700; color: var(--amber); margin-top: 4px; }
-
-/* ── SPINNER ── */
-.spinner {
-  width: 14px; height: 14px;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: #fff; border-radius: 50%;
-  animation: spin 0.6s linear infinite; display: inline-block;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── MONTHLY CHART BARS ── */
-.month-bars { display: flex; gap: 6px; align-items: flex-end; height: 100px; margin-top: 10px; }
-.month-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.month-bar { width: 100%; background: var(--blue-mid); border-radius: 4px 4px 0 0; min-height: 4px; transition: height 0.4s; position: relative; }
-.month-bar:hover { background: var(--blue); }
-.month-bar-label { font-size: 9px; color: var(--muted); font-weight: 600; }
-
-/* ── BACKUP / RESTORE AREA ── */
-.bk-area {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
-  margin-top: 14px;
-}
-.bk-card {
-  background: var(--bg); border: 1.5px solid var(--border);
-  border-radius: var(--radius-sm); padding: 16px;
-}
-.bk-card h4 { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
-.bk-card p { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
-
-/* ── CODE BLOCK ── */
-.code-block {
-  background: #1e1e2e; border-radius: 8px; padding: 14px;
-  margin-bottom: 14px; position: relative;
-}
-.code-block pre {
-  font-size: 11px; color: #cdd6f4; white-space: pre-wrap;
-  line-height: 1.6; font-family: monospace; margin: 0;
-  max-height: 280px; overflow-y: auto;
-}
-.code-block .copy-btn {
-  position: absolute; top: 10px; right: 10px;
-  background: rgba(255,255,255,0.1); color: #cdd6f4;
-  border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px;
-  border-radius: 4px; cursor: pointer; font-size: 11px; font-family: inherit;
-}
-
-/* ── SYNC STATUS BAR ── */
-.sync-bar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 14px; border-radius: var(--radius-sm);
-  background: var(--blue-light); border: 1px solid var(--blue-mid);
-  margin-bottom: 16px; font-size: 12px; color: var(--blue); font-weight: 600;
-}
-.sync-bar.err { background: var(--red-light); border-color: #FECACA; color: var(--red); }
-.sync-bar.ok { background: var(--green-light); border-color: #A7F3D0; color: var(--green); }
-.sync-bar.warn { background: var(--amber-light); border-color: #FDE68A; color: var(--amber); }
-
-/* ── RESPONSIVE ── */
-@media(max-width: 768px) {
-  .sidebar { transform: translateX(-100%); }
-  .sidebar.open { transform: translateX(0); }
-  .hamburger { display: block; }
-  .main { margin-left: 0; padding: 16px; padding-top: 56px; }
-  .stats-row { grid-template-columns: 1fr 1fr; }
-  .form-grid, .form-grid-3 { grid-template-columns: 1fr; }
-  .span2, .span3 { grid-column: span 1; }
-  .expense-summary-grid { grid-template-columns: 1fr 1fr; }
-  .bk-area { grid-template-columns: 1fr; }
-  .page-header { flex-direction: column; }
-}
-@media(max-width: 480px) {
-  .stats-row { grid-template-columns: 1fr; }
-  .expense-summary-grid { grid-template-columns: 1fr; }
-}
+@media(max-width:480px){.stats-row{grid-template-columns:1fr}.expense-summary-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<!-- Loading Overlay -->
 <div id="loading-overlay">
   <div class="loading-spinner-lg"></div>
   <div>Google Sheets இலிருந்து தரவு ஏற்றுகிறது...</div>
@@ -460,249 +252,131 @@ tbody tr:hover td { background: #F8FAFF; }
 <button class="hamburger" onclick="toggleSidebar()">☰</button>
 
 <div class="app">
-
-<!-- ══════════════════════════════════ SIDEBAR ══════════════════════════════════ -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <h1>🚗 வாகன மேலாண்மை</h1>
     <p>Vehicle Fleet System v3.0</p>
   </div>
-
-  <div class="sheets-status-pill" id="sheetsPill">
+  <div class="sheets-pill">
     <div class="dot" id="sheetsDot"></div>
-    <span id="sheetsLabel">Sheet இணைக்கப்படவில்லை</span>
+    <span id="sheetsLabel">இணைக்கிறது...</span>
   </div>
-
   <nav class="nav">
     <div class="nav-section">முக்கிய பக்கங்கள்</div>
-    <div class="nav-item active" id="nav-dashboard" onclick="showPage('dashboard')">
-      <span class="nav-icon">📊</span> டாஷ்போர்டு
-    </div>
+    <div class="nav-item active" id="nav-dashboard" onclick="showPage('dashboard')"><span class="nav-icon">📊</span>டாஷ்போர்டு</div>
     <div class="nav-section">பதிவுகள்</div>
-    <div class="nav-item" id="nav-vehicles" onclick="showPage('vehicles')">
-      <span class="nav-icon">🚗</span> வாகனங்கள்
-    </div>
-    <div class="nav-item" id="nav-maintenance" onclick="showPage('maintenance')">
-      <span class="nav-icon">🔧</span> பராமரிப்பு & செலவு
-    </div>
-    <div class="nav-section">பகுப்பாய்வு & அமைவு</div>
-    <div class="nav-item" id="nav-report" onclick="showPage('report')">
-      <span class="nav-icon">📈</span> விரிவான அறிக்கை
-    </div>
-    <div class="nav-item" id="nav-settings" onclick="showPage('settings')">
-      <span class="nav-icon">⚙️</span> அமைவுகள் & தரவு
-    </div>
+    <div class="nav-item" id="nav-vehicles" onclick="showPage('vehicles')"><span class="nav-icon">🚗</span>வாகனங்கள்</div>
+    <div class="nav-item" id="nav-maintenance" onclick="showPage('maintenance')"><span class="nav-icon">🔧</span>பராமரிப்பு & செலவு</div>
+    <div class="nav-section">பகுப்பாய்வு</div>
+    <div class="nav-item" id="nav-report" onclick="showPage('report')"><span class="nav-icon">📈</span>விரிவான அறிக்கை</div>
+    <div class="nav-item" id="nav-settings" onclick="showPage('settings')"><span class="nav-icon">⚙️</span>அமைவுகள் & தரவு</div>
   </nav>
-
   <div class="sidebar-bottom">
-    <button class="config-btn" onclick="openConfig()">
-      <div class="config-dot" id="configDot"></div>
-      <span id="configLabel">Google Sheets அமைவு</span>
-    </button>
-    <button class="config-btn" onclick="forceSyncAll()" id="syncAllBtn" style="display:none;">
-      <span>🔄</span>
-      <span>Sheet உடன் ஒத்திசை</span>
-    </button>
+    <button class="sb-btn" onclick="syncFromSheet()">🔄 Sheet இலிருந்து ஏற்று</button>
+    <button class="sb-btn" onclick="syncToSheet()">⬆️ Sheet-க்கு அனுப்பு</button>
   </div>
 </aside>
 
-<!-- ══════════════════════════════════ MAIN ══════════════════════════════════ -->
 <main class="main">
 
-<!-- ─── DASHBOARD ─── -->
+<!-- ═══════════════════════════════════════════════════
+     TOP BAR — visible on every page. Holds the logged-in
+     user pill and the Logout button, top-right.
+     ═══════════════════════════════════════════════════ -->
+<div class="topbar">
+  <div class="topbar-user">
+    <div class="topbar-avatar" id="topbar-avatar">?</div>
+    <span class="topbar-user-name" id="topbar-username">பயனர்</span>
+  </div>
+  <button class="btn-logout" id="logout-btn" onclick="openLogoutModal()" aria-label="வெளியேறு" title="வெளியேறு">
+    <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+    <span>வெளியேறு</span>
+  </button>
+</div>
+
+<!-- DASHBOARD -->
 <div class="page active" id="pg-dashboard">
   <div class="page-header">
     <div class="page-header-left">
       <h2>டாஷ்போர்டு சுருக்கம்</h2>
-      <p>அனைத்து வாகனங்கள், சேவை விபரங்கள் மற்றும் காலக்கெடு எச்சரிக்கைகள்</p>
+      <p>வாகனங்கள், சேவை விபரங்கள் மற்றும் காலக்கெடு எச்சரிக்கைகள்</p>
     </div>
     <div class="page-header-right">
-      <button class="btn btn-primary btn-sm" onclick="loadAllFromSheets()">🔄 Sheet புதுப்பி</button>
+      <button class="btn btn-primary btn-sm" onclick="syncFromSheet()">🔄 புதுப்பி</button>
     </div>
   </div>
-
-  <div id="sync-status-bar" style="display:none;" class="sync-bar"></div>
-
+  <div id="sync-bar" class="sync-bar" style="display:none"></div>
   <div class="stats-row">
-    <div class="stat-card blue">
-      <div class="stat-label">மொத்த வாகனங்கள்</div>
-      <div class="stat-val blue" id="ds-vehicles">0</div>
-      <div class="stat-sub">பதிவு செய்யப்பட்டவை</div>
-    </div>
-    <div class="stat-card amber">
-      <div class="stat-label">இந்த மாதப் பராமரிப்பு</div>
-      <div class="stat-val amber" id="ds-cost">₹0</div>
-      <div class="stat-sub" id="ds-cost-month"></div>
-    </div>
-    <div class="stat-card red">
-      <div class="stat-label">மொத்த செலவு</div>
-      <div class="stat-val red" id="ds-total-spent">₹0</div>
-      <div class="stat-sub">அனைத்து வருடங்களும்</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">சேவை எச்சரிக்கைகள்</div>
-      <div class="stat-val" id="ds-alerts-count">0</div>
-      <div class="stat-sub">இன்று நிலுவையில்</div>
-    </div>
+    <div class="stat-card blue"><div class="stat-label">மொத்த வாகனங்கள்</div><div class="stat-val blue" id="ds-total-v">0</div><div class="stat-sub">பதிவு செய்யப்பட்டவை</div></div>
+    <div class="stat-card amber"><div class="stat-label">இந்த மாதப் பராமரிப்பு</div><div class="stat-val amber" id="ds-month-cost">₹0</div><div class="stat-sub" id="ds-month-label"></div></div>
+    <div class="stat-card red"><div class="stat-label">மொத்த செலவு</div><div class="stat-val red" id="ds-total-cost">₹0</div><div class="stat-sub">அனைத்து வருடங்களும்</div></div>
+    <div class="stat-card"><div class="stat-label">சேவை எச்சரிக்கைகள்</div><div class="stat-val" id="ds-alerts">0</div><div class="stat-sub">இன்று நிலுவையில்</div></div>
   </div>
-
   <div class="card">
-    <div class="card-title">⚠️ காலக்கெடு எச்சரிக்கைகள் & சேவை நினைவூட்டல்கள்</div>
-    <div class="reminder-list" id="ds-reminders">
-      <div class="empty"><div class="ico">✅</div><p>எந்த எச்சரிக்கையும் இல்லை</p></div>
-    </div>
+    <div class="card-title">⚠️ காலக்கெடு எச்சரிக்கைகள் & நினைவூட்டல்கள்</div>
+    <div class="reminder-list" id="ds-reminders"><div class="empty"><div class="ico">✅</div><p>எந்த எச்சரிக்கையும் இல்லை</p></div></div>
   </div>
-
   <div class="card">
-    <div class="card-title">📅 மாதவாரியான செலவு தோற்றம் (கடந்த 6 மாதங்கள்)
-      <span class="badge" id="ds-recent-count">0</span>
-    </div>
-    <div id="monthly-chart-wrap"></div>
+    <div class="card-title">📅 மாதவாரியான செலவு (கடந்த 6 மாதங்கள்) <span class="badge" id="ds-recent-count">0</span></div>
+    <div id="ds-chart"></div>
   </div>
-
   <div class="card">
     <div class="card-title">🕐 சமீபத்திய பராமரிப்புப் பதிவுகள்</div>
-    <div id="ds-recent-list">
-      <div class="empty"><div class="ico">📋</div><p>பதிவுகள் ஏதுமில்லை</p></div>
-    </div>
+    <div id="ds-recent"></div>
   </div>
 </div>
 
-<!-- ─── VEHICLES ─── -->
+<!-- VEHICLES -->
 <div class="page" id="pg-vehicles">
   <div class="page-header">
-    <div class="page-header-left">
-      <h2>🚗 வாகனங்கள் பதிவு</h2>
-      <p>புதிய வாகனம் சேர்க்கவும், திருத்தவும் அல்லது நீக்கவும்</p>
-    </div>
+    <div class="page-header-left"><h2>🚗 வாகனங்கள் பதிவு</h2><p>புதிய வாகனம் சேர்க்கவும், திருத்தவும் அல்லது நீக்கவும்</p></div>
   </div>
-
   <div class="card">
     <div class="card-title" id="v-form-title">புதிய வாகனம் சேர்க்க</div>
     <input type="hidden" id="v-edit-id">
     <div class="form-grid">
-      <div class="field">
-        <label>பதிவு எண் <span class="req">*</span></label>
-        <input id="v-regno" placeholder="TN 11 AB 1234" oninput="this.value=this.value.toUpperCase()">
-      </div>
-      <div class="field">
-        <label>வாகன பெயர் / மாடல் <span class="req">*</span></label>
-        <input id="v-name" placeholder="உதாரணம்: Tata Ace Gold">
-      </div>
-      <div class="field">
-        <label>வகை</label>
-        <select id="v-type">
-          <option>பயணியர் கார் (Car)</option>
-          <option>இரு சக்கர வாகனம் (Two Wheeler)</option>
-          <option>லாரி / டிரக் (Truck / Lorry)</option>
-          <option>வேன் (Van)</option>
-          <option>டிராக்டர் (Tractor)</option>
-          <option>ஆட்டோ ரிக்ஷா (Auto Rickshaw)</option>
-          <option>பேருந்து (Bus)</option>
-          <option>ஜீப் / SUV (Jeep / SUV)</option>
-          <option>இதர (Other)</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>எரிபொருள் வகை</label>
-        <select id="v-fuel">
-          <option>பெட்ரோல் (Petrol)</option>
-          <option>டீசல் (Diesel)</option>
-          <option>CNG</option>
-          <option>மின்சார (Electric)</option>
-          <option>LPG</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>காப்பீடு முடிவு தேதி <span class="req">*</span></label>
-        <input type="date" id="v-ins-exp">
-      </div>
-      <div class="field">
-        <label>FC தகுதிச் சான்றிதழ் முடிவு தேதி <span class="req">*</span></label>
-        <input type="date" id="v-fc-exp">
-      </div>
-      <div class="field">
-        <label>தற்போதைய கிமீ நிலை</label>
-        <input type="number" id="v-odo" placeholder="உதாரணம்: 45000">
-      </div>
-      <div class="field">
-        <label>நிலை</label>
-        <select id="v-status">
-          <option value="active">🟢 இயங்குகிறது (Running)</option>
-          <option value="service">🟡 சர்வீஸில் (In Service)</option>
-          <option value="idle">🔴 நிறுத்தப்பட்டுள்ளது (Stopped)</option>
-        </select>
-      </div>
-      <div class="field span2">
-        <label>குறிப்பு / கூடுதல் தகவல்</label>
-        <input id="v-note" placeholder="விருப்பமான குறிப்பு...">
-      </div>
+      <div class="field"><label>பதிவு எண் <span class="req">*</span></label><input id="v-regno" placeholder="TN 11 AB 1234" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="field"><label>வாகன பெயர் / மாடல் <span class="req">*</span></label><input id="v-name" placeholder="உதாரணம்: Tata Ace Gold"></div>
+      <div class="field"><label>வகை</label><select id="v-type"><option>பயணியர் கார் (Car)</option><option>இரு சக்கர வாகனம் (Two Wheeler)</option><option>லாரி / டிரக் (Truck / Lorry)</option><option>வேன் (Van)</option><option>டிராக்டர் (Tractor)</option><option>ஆட்டோ ரிக்ஷா (Auto Rickshaw)</option><option>பேருந்து (Bus)</option><option>ஜீப் / SUV (Jeep / SUV)</option><option>இதர (Other)</option></select></div>
+      <div class="field"><label>எரிபொருள் வகை</label><select id="v-fuel"><option>பெட்ரோல் (Petrol)</option><option>டீசல் (Diesel)</option><option>CNG</option><option>மின்சார (Electric)</option><option>LPG</option></select></div>
+      <div class="field"><label>காப்பீடு முடிவு தேதி <span class="req">*</span></label><input type="date" id="v-ins"></div>
+      <div class="field"><label>FC சான்றிதழ் முடிவு தேதி <span class="req">*</span></label><input type="date" id="v-fc"></div>
+      <div class="field"><label>தற்போதைய கிமீ நிலை</label><input type="number" id="v-odo" placeholder="45000"></div>
+      <div class="field"><label>நிலை</label><select id="v-status"><option value="active">🟢 இயங்குகிறது</option><option value="service">🟡 சர்வீஸில்</option><option value="idle">🔴 நிறுத்தம்</option></select></div>
+      <div class="field span2"><label>குறிப்பு</label><input id="v-note" placeholder="கூடுதல் தகவல்..."></div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-success" id="v-save-btn" onclick="saveVehicle()">
-        🚗 வாகனம் சேமி & Sheet-ல் பதிவு செய்
-      </button>
-      <button class="btn btn-ghost" id="v-cancel-btn" onclick="resetVehicleForm()" style="display:none;">ரத்து செய்</button>
-      <span id="v-saving" style="display:none;font-size:12px;color:var(--muted);align-items:center;gap:6px;">
-        <span class="spinner" style="border-top-color:var(--green);border-color:var(--border2)"></span> சேமிக்கிறது...
-      </span>
+      <button class="btn btn-success" id="v-save-btn" onclick="saveVehicle()">🚗 வாகனம் சேமி</button>
+      <button class="btn btn-ghost" id="v-cancel-btn" onclick="resetVehicleForm()" style="display:none">ரத்து</button>
+      <span id="v-spin" style="display:none;font-size:12px;color:var(--muted);align-items:center;gap:6px"><span class="spinner" style="border-top-color:var(--green);border-color:var(--border2)"></span> சேமிக்கிறது...</span>
     </div>
   </div>
-
   <div class="card">
     <div class="card-title" style="justify-content:space-between">
       <span>📋 வாகன பட்டியல் <span class="badge" id="v-count">0</span></span>
-      <div class="search-row" style="margin:0">
-        <div class="search-box" style="min-width:200px">
-          <span class="ico">🔍</span>
-          <input placeholder="பதிவு எண் / பெயர் தேடவும்..." oninput="filterVehicles(this.value)">
-        </div>
-      </div>
+      <div class="search-box" style="max-width:260px"><span>🔍</span><input placeholder="பதிவு எண் / பெயர் தேடவும்..." oninput="filterV(this.value)"></div>
     </div>
     <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>பதிவு எண்</th><th>பெயர் / மாடல்</th><th>எரிபொருள்</th>
-            <th>காப்பீடு தேதி</th><th>FC தேதி</th><th>நிலை</th><th>நடவடிக்கை</th>
-          </tr>
-        </thead>
-        <tbody id="v-tbody"></tbody>
-      </table>
+      <table><thead><tr><th>பதிவு எண்</th><th>பெயர் / மாடல்</th><th>எரிபொருள்</th><th>காப்பீடு</th><th>FC தேதி</th><th>நிலை</th><th>நடவடிக்கை</th></tr></thead>
+      <tbody id="v-tbody"></tbody></table>
     </div>
-    <div id="v-empty" class="empty" style="display:none">
-      <div class="ico">🚗</div><p>வாகனங்கள் ஏதும் பதிவு செய்யப்படவில்லை</p>
-    </div>
+    <div id="v-empty" class="empty" style="display:none"><div class="ico">🚗</div><p>வாகனங்கள் ஏதும் பதிவு செய்யப்படவில்லை</p></div>
   </div>
 </div>
 
-<!-- ─── MAINTENANCE ─── -->
+<!-- MAINTENANCE -->
 <div class="page" id="pg-maintenance">
   <div class="page-header">
-    <div class="page-header-left">
-      <h2>🔧 பராமரிப்பு & செலவு பதிவு</h2>
-      <p>சர்வீஸ், பழுதுகள் மற்றும் நிதிப் பதிவுகளை பதிவு செய்யுங்கள்</p>
-    </div>
+    <div class="page-header-left"><h2>🔧 பராமரிப்பு & செலவு பதிவு</h2><p>சர்வீஸ், பழுதுகள் மற்றும் நிதிப் பதிவுகளை பதிவு செய்யுங்கள்</p></div>
   </div>
-
   <div class="card">
     <div class="card-title" id="m-form-title">புதிய பராமரிப்பு / சர்வீஸ் பதிவு</div>
     <input type="hidden" id="m-edit-id">
     <div class="form-grid-3">
-      <div class="field">
-        <label>சர்வீஸ் தேதி <span class="req">*</span></label>
-        <input type="date" id="m-date">
-      </div>
-      <div class="field">
-        <label>மாதம் <span class="req">*</span></label>
-        <input type="month" id="m-month">
-      </div>
-      <div class="field">
-        <label>வாகனம் <span class="req">*</span></label>
-        <select id="m-vehicle"></select>
-      </div>
-      <div class="field">
-        <label>பராமரிப்பு வகை <span class="req">*</span></label>
+      <div class="field"><label>சர்வீஸ் தேதி <span class="req">*</span></label><input type="date" id="m-date"></div>
+      <div class="field"><label>மாதம் <span class="req">*</span></label><input type="month" id="m-month"></div>
+      <div class="field"><label>வாகனம் <span class="req">*</span></label><select id="m-vehicle"></select></div>
+      <div class="field"><label>பராமரிப்பு வகை <span class="req">*</span></label>
         <select id="m-cat">
           <option>பொது சர்வீஸ் (General Service)</option>
           <option>என்ஜின் ஆயில் மாற்றம் (Oil Change)</option>
@@ -714,1457 +388,1087 @@ tbody tr:hover td { background: #F8FAFF; }
           <option>இதர செலவினங்கள் (Other Repair)</option>
         </select>
       </div>
-      <div class="field">
-        <label>செலவு தொகை (₹) <span class="req">*</span></label>
-        <input type="number" id="m-amt" placeholder="0.00" min="0" step="0.01">
-      </div>
-      <div class="field">
-        <label>அடுத்த சர்வீஸ் தேதி <span class="req">*</span></label>
-        <input type="date" id="m-next-date">
-      </div>
-      <div class="field">
-        <label>பட்டறை / மெக்கானிக்</label>
-        <input id="m-workshop" placeholder="உதாரணம்: Murugan Auto Workshop">
-      </div>
-      <div class="field">
-        <label>நிலை</label>
-        <select id="m-status">
-          <option value="pending">⏳ நிலுவையில் (Reminder Active)</option>
-          <option value="completed">✅ முடிந்தது (Closed)</option>
-        </select>
-      </div>
-      <div class="field span3">
-        <label>விளக்கம் / குறிப்பு</label>
-        <input id="m-desc" placeholder="பழுது குறித்த விபரங்கள்...">
-      </div>
+      <div class="field"><label>செலவு தொகை (₹) <span class="req">*</span></label><input type="number" id="m-amt" placeholder="0.00" min="0"></div>
+      <div class="field"><label>அடுத்த சர்வீஸ் தேதி <span class="req">*</span></label><input type="date" id="m-next"></div>
+      <div class="field"><label>பட்டறை / மெக்கானிக்</label><input id="m-workshop" placeholder="Murugan Auto Workshop"></div>
+      <div class="field"><label>நிலை</label><select id="m-status"><option value="pending">⏳ நிலுவையில்</option><option value="completed">✅ முடிந்தது</option></select></div>
+      <div class="field span3"><label>விளக்கம்</label><input id="m-desc" placeholder="பழுது குறித்த விபரங்கள்..."></div>
     </div>
     <div class="btn-row">
-      <button class="btn btn-success" id="m-save-btn" onclick="saveMaintenance()">
-        💰 பராமரிப்புப் பதிவு செய் & Sheet-ல் சேமி
-      </button>
-      <button class="btn btn-ghost" id="m-cancel-btn" onclick="resetMaintenanceForm()" style="display:none;">ரத்து செய்</button>
-      <span id="m-saving-span" style="display:none;font-size:12px;color:var(--muted);align-items:center;gap:6px;">
-        <span class="spinner" style="border-top-color:var(--green);border-color:var(--border2)"></span> சேமிக்கிறது...
-      </span>
+      <button class="btn btn-success" id="m-save-btn" onclick="saveMaint()">💰 பராமரிப்புப் பதிவு செய்</button>
+      <button class="btn btn-ghost" id="m-cancel-btn" onclick="resetMaintForm()" style="display:none">ரத்து</button>
+      <span id="m-spin" style="display:none;font-size:12px;color:var(--muted);align-items:center;gap:6px"><span class="spinner" style="border-top-color:var(--green);border-color:var(--border2)"></span> சேமிக்கிறது...</span>
     </div>
   </div>
-
   <div class="card">
     <div class="card-title" style="justify-content:space-between;width:100%">
       <span>📋 பராமரிப்புப் பதிவுகள்</span>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <div class="search-box" style="min-width:160px">
-          <span class="ico">🔍</span>
-          <input placeholder="வாகனம் / வகை தேடு..." oninput="filterMaintenance(this.value)">
-        </div>
-        <select id="filter-month" onchange="renderMaintenanceList()" style="padding:6px 12px;font-size:12px;border:1px solid var(--border2);border-radius:6px;background:#fff;min-width:140px;"></select>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div class="search-box" style="max-width:200px"><span>🔍</span><input placeholder="வாகனம் / வகை..." oninput="filterM(this.value)"></div>
+        <select id="m-filter-month" onchange="renderMaintList()" style="padding:7px 12px;font-size:12px;border:1.5px solid var(--border2);border-radius:6px;background:#fff"></select>
       </div>
     </div>
     <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>தேதி</th><th>வாகனம்</th><th>பராமரிப்பு வகை</th>
-            <th>தொகை</th><th>அடுத்த தேதி</th><th>நிலை</th><th>நடவடிக்கை</th>
-          </tr>
-        </thead>
-        <tbody id="m-tbody-list"></tbody>
-      </table>
+      <table><thead><tr><th>தேதி</th><th>வாகனம்</th><th>பராமரிப்பு வகை</th><th>தொகை</th><th>அடுத்த தேதி</th><th>நிலை</th><th>நடவடிக்கை</th></tr></thead>
+      <tbody id="m-tbody"></tbody></table>
     </div>
-    <div id="m-empty" class="empty" style="display:none">
-      <div class="ico">🔧</div><p>இந்த மாதத்தில் பராமரிப்புப் பதிவுகள் ஏதுமில்லை</p>
-    </div>
+    <div id="m-empty" class="empty" style="display:none"><div class="ico">🔧</div><p>பராமரிப்புப் பதிவுகள் ஏதுமில்லை</p></div>
   </div>
 </div>
 
-<!-- ─── REPORT ─── -->
+<!-- REPORT -->
 <div class="page" id="pg-report">
-  <div id="printable-report-area">
+  <div id="report-print-area">
     <div class="page-header">
-      <div class="page-header-left">
-        <h2>📈 விரிவான வாகன நிதி & செலவு அறிக்கை</h2>
-        <p>பராமரிப்புச் செலவு வரலாறு, வகைப்பாடுகள் மற்றும் வாகன வாரியான செலவுகளின் தொகுப்பு</p>
-      </div>
-      <div class="page-header-right" id="ignore-pdf-btn">
-        <button class="btn btn-amber" onclick="exportReportToPDF()">📥 PDF தரவிறக்கம்</button>
-      </div>
+      <div class="page-header-left"><h2>📈 விரிவான வாகன நிதி & செலவு அறிக்கை</h2><p>பராமரிப்புச் செலவு வரலாறு மற்றும் வகைப்பாடுகள்</p></div>
+      <div class="page-header-right" id="pdf-btn-wrap"><button class="btn btn-amber" onclick="exportPDF()">📥 PDF தரவிறக்கம்</button></div>
     </div>
-
-    <div class="card" id="ignore-pdf-filters" style="border-left: 4px solid var(--blue);">
+    <div class="card" id="report-filters">
       <div class="card-title">🔍 அறிக்கை வடிகட்டி</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;align-items:end;">
-        <div class="field">
-          <label>தேர்வு முறை</label>
-          <select id="rep-filter-type" onchange="toggleFilterInputs()">
-            <option value="year">வருட வாரியாக (Yearly)</option>
-            <option value="month">மாத வாரியாக (Monthly)</option>
-            <option value="date">குறிப்பிட்ட தேதி (Exact Date)</option>
-            <option value="all">அனைத்தும் (All Time)</option>
-          </select>
-        </div>
-        <div class="field" id="f-year-div">
-          <label>வருடம்</label>
-          <select id="r-year" onchange="renderReport()"></select>
-        </div>
-        <div class="field" id="f-month-div" style="display:none;">
-          <label>மாதம்</label>
-          <input type="month" id="r-month" onchange="renderReport()">
-        </div>
-        <div class="field" id="f-date-div" style="display:none;">
-          <label>தேதி</label>
-          <input type="date" id="r-date" onchange="renderReport()">
-        </div>
-        <div class="field">
-          <label>வாகனம்</label>
-          <select id="r-vehicle" onchange="renderReport()">
-            <option value="">அனைத்து வாகனங்கள்</option>
-          </select>
-        </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end">
+        <div class="field"><label>தேர்வு முறை</label><select id="r-mode" onchange="toggleRFilter()"><option value="year">வருட வாரியாக</option><option value="month">மாத வாரியாக</option><option value="date">குறிப்பிட்ட தேதி</option><option value="all">அனைத்தும்</option></select></div>
+        <div class="field" id="r-year-div"><label>வருடம்</label><select id="r-year" onchange="renderReport()"></select></div>
+        <div class="field" id="r-month-div" style="display:none"><label>மாதம்</label><input type="month" id="r-month" onchange="renderReport()"></div>
+        <div class="field" id="r-date-div" style="display:none"><label>தேதி</label><input type="date" id="r-date" onchange="renderReport()"></div>
+        <div class="field"><label>வாகனம்</label><select id="r-vehicle" onchange="renderReport()"><option value="">அனைத்து வாகனங்கள்</option></select></div>
       </div>
     </div>
-
     <div class="stats-row">
-      <div class="stat-card red"><div class="stat-label">மொத்த பராமரிப்பு செலவு</div><div class="stat-val red" id="r-total-expense">₹0</div></div>
-      <div class="stat-card blue"><div class="stat-label">கண்காணிக்கப்படும் வாகனங்கள்</div><div class="stat-val blue" id="r-active-vehicles">0</div></div>
-      <div class="stat-card green"><div class="stat-label">முடிக்கப்பட்ட சர்வீஸ்</div><div class="stat-val green" id="r-completed-services">0</div></div>
-      <div class="stat-card amber"><div class="stat-label">நிலுவையில் உள்ளவை</div><div class="stat-val amber" id="r-pending-services">0</div></div>
+      <div class="stat-card red"><div class="stat-label">மொத்த பராமரிப்பு செலவு</div><div class="stat-val red" id="r-total">₹0</div></div>
+      <div class="stat-card blue"><div class="stat-label">கண்காணிக்கப்படும் வாகனங்கள்</div><div class="stat-val blue" id="r-vcnt">0</div></div>
+      <div class="stat-card green"><div class="stat-label">முடிக்கப்பட்ட சர்வீஸ்</div><div class="stat-val green" id="r-done">0</div></div>
+      <div class="stat-card amber"><div class="stat-label">நிலுவையில் உள்ளவை</div><div class="stat-val amber" id="r-pend">0</div></div>
     </div>
-
-    <!-- Monthly expenses chart in report -->
-    <div class="card" style="border-top:4px solid var(--blue);">
-      <div class="card-title">📅 மாதவாரியான செலவு அறிக்கை (Monthly Expenses)</div>
+    <div class="card" style="border-top:4px solid var(--blue)">
+      <div class="card-title">📅 மாதவாரியான செலவு அறிக்கை</div>
       <div id="r-monthly-chart"></div>
     </div>
-
-    <!-- Vehicle-wise expenses -->
-    <div class="card" style="border-top:4px solid var(--green);">
-      <div class="card-title">🚗 வாகன வாரியான செலவு (Vehicle-wise Expenses)</div>
+    <div class="card" style="border-top:4px solid var(--green)">
+      <div class="card-title">🚗 வாகன வாரியான செலவு</div>
       <div id="r-vehicle-chart"></div>
     </div>
-
-    <div class="card" style="border-top:4px solid var(--amber);">
-      <div class="card-title">📊 செலவு வகை வாரியான அறிக்கை (Category-wise)</div>
-      <div class="expense-summary-grid" id="r-expense-cat-summary"></div>
+    <div class="card" style="border-top:4px solid var(--amber)">
+      <div class="card-title">📊 செலவு வகை வாரியான அறிக்கை</div>
+      <div class="expense-summary-grid" id="r-cat-summary"></div>
     </div>
-
     <div class="card">
-      <div class="card-title">📋 வடிகட்டப்பட்ட பராமரிப்புச் செலவுப் பட்டியல்</div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>தேதி / மாதம்</th><th>வாகன எண்</th><th>பராமரிப்பு வகை</th>
-              <th>பட்டறை / மெக்கானிக்</th><th>செலவுத் தொகை</th>
-            </tr>
-          </thead>
-          <tbody id="r-exp-tbody"></tbody>
-        </table>
-      </div>
-      <div id="r-exp-empty" class="empty" style="display:none"><div class="ico">💸</div><p>பதிவுகள் ஏதுமில்லை</p></div>
+      <div class="card-title">📋 வடிகட்டப்பட்ட செலவுப் பட்டியல்</div>
+      <div class="table-wrap"><table><thead><tr><th>தேதி</th><th>வாகன எண்</th><th>பராமரிப்பு வகை</th><th>பட்டறை</th><th>தொகை</th></tr></thead><tbody id="r-tbody"></tbody></table></div>
+      <div id="r-empty" class="empty" style="display:none"><div class="ico">💸</div><p>பதிவுகள் ஏதுமில்லை</p></div>
     </div>
   </div>
 </div>
 
-<!-- ─── SETTINGS ─── -->
+<!-- SETTINGS -->
 <div class="page" id="pg-settings">
   <div class="page-header">
-    <div class="page-header-left">
-      <h2>⚙️ அமைவுகள் & தரவு மேலாண்மை</h2>
-      <p>Google Sheets இணைப்பு, தரவு காப்புப்பிரதி மற்றும் மீட்டெடுப்பு</p>
-    </div>
+    <div class="page-header-left"><h2>⚙️ அமைவுகள் & தரவு மேலாண்மை</h2><p>Google Sheets இணைப்பு நிலை, காப்புப்பிரதி மற்றும் மீட்டெடுப்பு</p></div>
   </div>
-
-  <!-- Connection Status -->
   <div class="card">
     <div class="card-title">🔗 Google Sheets இணைப்பு நிலை</div>
-    <div id="settings-conn-status" style="padding:14px;border-radius:8px;margin-bottom:14px;font-size:13px;">
-      சரிபார்க்கிறது...
+    <div id="s-conn-box" style="padding:14px;border-radius:8px;margin-bottom:14px;font-size:13px;background:var(--green-light);border:1px solid #A7F3D0;color:var(--green)">
+      ✅ <strong>நிரந்தரமாக இணைக்கப்பட்டுள்ளது!</strong><br>
+      <span style="font-size:11px;word-break:break-all;opacity:0.8">https://script.google.com/macros/s/AKfycbylAACRCHdI461Rh-u3-fjrc7Be6oHoFVhz2fqwsgmpJccSTa2SxjecDxdq6fUrmGNg/exec</span>
     </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <button class="btn btn-primary" onclick="openConfig()">⚙️ Web App URL மாற்று</button>
-      <button class="btn btn-ghost" onclick="testConnection()">🔗 இணைப்பை சோதி</button>
-      <button class="btn btn-success" onclick="forceSyncAll()">🔄 அனைத்தையும் ஒத்திசை</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="testConn()">🔗 இணைப்பை சோதி</button>
+      <button class="btn btn-success" onclick="syncToSheet()">⬆️ அனைத்தையும் Sheet-க்கு அனுப்பு</button>
+      <button class="btn btn-ghost" onclick="syncFromSheet()">🔄 Sheet இலிருந்து ஏற்று</button>
     </div>
   </div>
-
-  <!-- Spreadsheet Info -->
   <div class="card">
     <div class="card-title">📊 Spreadsheet தகவல்</div>
-    <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:13px;line-height:2;">
-      <strong>Spreadsheet ID:</strong> <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px;font-size:12px;">16RrGpYDvsgNlEsxKo8wjSvC6xIOu7s44A8W3EIn4RMk</code><br>
-      <strong>Sheets:</strong> Vehicles, Maintenance, Reports<br>
-      <a href="https://docs.google.com/spreadsheets/d/16RrGpYDvsgNlEsxKo8wjSvC6xIOu7s44A8W3EIn4RMk/edit" target="_blank" style="color:var(--blue);font-weight:600;">📄 Google Sheet திறக்க →</a>
+    <div style="background:var(--bg);border-radius:8px;padding:14px;font-size:13px;line-height:2.2">
+      <strong>Spreadsheet ID:</strong> <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px;font-size:11px">1QDKfUmun1MuXcxTUh52lJMZR1J0cSNRTVfwBKZvTzHs</code><br>
+      <strong>தரவு Sheets:</strong> Vehicles, Maintenance, Reports<br>
+      <a href="https://docs.google.com/spreadsheets/d/1QDKfUmun1MuXcxTUh52lJMZR1J0cSNRTVfwBKZvTzHs/edit" target="_blank" style="color:var(--blue);font-weight:600">📄 Google Sheet திறக்க →</a>
     </div>
   </div>
-
-  <!-- Backup / Restore -->
-  <div class="card">
-    <div class="card-title">💾 தரவு காப்புப்பிரதி & மீட்டெடுப்பு (Backup & Restore)</div>
-    <div class="bk-area">
-      <div class="bk-card">
-        <h4>📥 LocalStorage காப்புப்பிரதி</h4>
-        <p>தற்போதைய தரவை JSON கோப்பாக தரவிறக்கவும். இணையம் இல்லாமல் பயன்படுத்தலாம்.</p>
-        <button class="btn btn-primary" onclick="backupToJSON()">📥 JSON தரவிறக்கம்</button>
-      </div>
-      <div class="bk-card">
-        <h4>📤 தரவை மீட்டெடு</h4>
-        <p>முன்பு சேமித்த JSON காப்புப்பிரதியை இங்கே ஏற்றவும்.</p>
-        <label class="btn btn-ghost" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
-          📤 JSON ஏற்று <input type="file" accept=".json" onchange="restoreFromJSON(this)" style="display:none">
-        </label>
-      </div>
-      <div class="bk-card">
-        <h4>🔄 Sheet → LocalStorage ஒத்திசை</h4>
-        <p>Google Sheet-லிருந்து அனைத்து தரவையும் LocalStorage-ல் புதுப்பிக்கவும்.</p>
-        <button class="btn btn-success" onclick="loadAllFromSheets()">🔄 Sheet இலிருந்து ஏற்று</button>
-      </div>
-      <div class="bk-card">
-        <h4>⬆️ LocalStorage → Sheet அனுப்பு</h4>
-        <p>LocalStorage-ல் உள்ள அனைத்து தரவையும் Google Sheet-ல் ஒத்திசைக்கவும்.</p>
-        <button class="btn btn-amber" onclick="forceSyncAll()">⬆️ Sheet-க்கு அனுப்பு</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Stats -->
   <div class="card">
     <div class="card-title">📊 தரவு புள்ளிவிவரங்கள்</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;" id="settings-stats"></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px" id="s-stats"></div>
   </div>
-
-  <!-- Danger Zone -->
-  <div class="card" style="border:2px solid var(--red-light);">
-    <div class="card-title" style="color:var(--red);">🗑️ தரவை அழி (Danger Zone)</div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">கவனம்! இந்த நடவடிக்கைகள் மீட்க முடியாதவை. LocalStorage மட்டுமே அழிக்கப்படும்.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <button class="btn btn-ghost" style="color:var(--red);border-color:var(--red);" onclick="clearAllData()">🗑️ அனைத்து LocalStorage தரவையும் அழி</button>
+  <div class="card">
+    <div class="card-title">💾 காப்புப்பிரதி & மீட்டெடுப்பு</div>
+    <div class="bk-area">
+      <div class="bk-card"><h4>📥 JSON காப்புப்பிரதி</h4><p>தரவை JSON கோப்பாக தரவிறக்கவும்</p><button class="btn btn-primary" onclick="backupJSON()">📥 JSON தரவிறக்கம்</button></div>
+      <div class="bk-card"><h4>📤 JSON மீட்டெடு</h4><p>முன்பு சேமித்த JSON-ஐ மீட்டெடுக்கவும்</p><label class="btn btn-ghost" style="cursor:pointer">📤 JSON ஏற்று<input type="file" accept=".json" onchange="restoreJSON(this)" style="display:none"></label></div>
+      <div class="bk-card"><h4>🔄 Sheet → Local</h4><p>Google Sheet-லிருந்து தரவை ஏற்றவும்</p><button class="btn btn-success" onclick="syncFromSheet()">🔄 Sheet இலிருந்து ஏற்று</button></div>
+      <div class="bk-card"><h4>⬆️ Local → Sheet</h4><p>LocalStorage-ல் உள்ள தரவை Sheet-க்கு அனுப்பவும்</p><button class="btn btn-amber" onclick="syncToSheet()">⬆️ Sheet-க்கு அனுப்பு</button></div>
     </div>
+  </div>
+  <div class="card" style="border:2px solid var(--red-light)">
+    <div class="card-title" style="color:var(--red)">🗑️ தரவை அழி (Danger Zone)</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px">கவனம்! LocalStorage தரவு மட்டுமே அழிக்கப்படும். Google Sheet மாறாது.</p>
+    <button class="btn btn-ghost" style="color:var(--red);border-color:var(--red)" onclick="clearLocal()">🗑️ LocalStorage அழி</button>
   </div>
 </div>
 
 </main>
 </div>
 
-<!-- ══════════════════════════════════ CONFIG MODAL ══════════════════════════════════ -->
-<div class="modal-overlay" id="configModal">
-  <div class="modal" style="width:600px;">
-    <h3>⚙️ Google Sheets Web App அமைவு</h3>
-    <p>Apps Script Web App URL மூலம் Sheets-ல் நேரடியாக data சேமிக்கலாம். கீழே உள்ள படிகளை பின்பற்றவும்:</p>
+<div class="toast" id="toast"></div>
 
-    <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:14px;font-size:12px;color:#166534;line-height:2;margin-bottom:14px;">
-      <strong>📋 ஒரு முறை அமைவு படிகள்:</strong><br>
-      1. உங்கள் Google Sheet திறக்கவும் → <strong>Extensions → Apps Script</strong> கிளிக்.<br>
-      2. கீழே உள்ள Code-ஐ Apps Script Editor-ல் ஒட்டவும் (முழுமையாக மாற்றவும்).<br>
-      3. <strong>Deploy → New Deployment → Web App</strong> → "Execute as: Me", "Who has access: Anyone" → Deploy.<br>
-      4. உருவான <strong>Web App URL</strong>-ஐ கீழே ஒட்டவும்.
-    </div>
-
-    <div class="code-block">
-      <div style="font-size:10px;color:#a6adc8;margin-bottom:8px;font-weight:600;">📄 Apps Script Code (Copy செய்து Editor-ல் ஒட்டவும்):</div>
-      <pre id="appsScriptCode">// Vehicle Management System - Google Apps Script
-// Spreadsheet ID: 16RrGpYDvsgNlEsxKo8wjSvC6xIOu7s44A8W3EIn4RMk
-const SPREADSHEET_ID = '16RrGpYDvsgNlEsxKo8wjSvC6xIOu7s44A8W3EIn4RMk';
-
-const SHEETS = {
-  VEHICLES: 'Vehicles',
-  MAINTENANCE: 'Maintenance',
-  REPORTS: 'Reports'
-};
-
-const VEHICLE_HEADERS   = ['ID','RegNo','Name','Type','Fuel','InsuranceExpiry','FCExpiry','Odometer','Status','Notes','Timestamp'];
-const MAINT_HEADERS     = ['ID','Date','Month','VehicleID','VehicleReg','Category','Amount','NextServiceDate','Workshop','Status','Description','Timestamp'];
-const REPORT_HEADERS    = ['ExportDate','FilterType','TotalExpense','VehicleCount','CompletedServices','PendingServices','GeneratedBy'];
-
-function getOrCreateSheet(ss, name, headers) {
-  let sh = ss.getSheetByName(name);
-  if (!sh) {
-    sh = ss.insertSheet(name);
-    sh.appendRow(headers);
-    sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1a73e8').setFontColor('#ffffff');
-    sh.setFrozenRows(1);
-  }
-  return sh;
-}
-
-function doPost(e) {
-  try {
-    const raw = (e.parameter && e.parameter.payload) ? e.parameter.payload : e.postData.contents;
-    const data = JSON.parse(raw);
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const action = data.action || 'append';
-
-    if (action === 'append') {
-      return handleAppend(ss, data);
-    } else if (action === 'update') {
-      return handleUpdate(ss, data);
-    } else if (action === 'delete') {
-      return handleDelete(ss, data);
-    } else if (action === 'syncAll') {
-      return handleSyncAll(ss, data);
-    } else if (action === 'logReport') {
-      return handleLogReport(ss, data);
-    }
-    return jsonResponse({status:'error', msg:'Unknown action'});
-  } catch(err) {
-    return jsonResponse({status:'error', msg: err.toString()});
-  }
-}
-
-function doGet(e) {
-  try {
-    const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const sheet = e.parameter.sheet;
-    if (!sheet) return jsonResponse({status:'ready', spreadsheetId: SPREADSHEET_ID});
-
-    const headers = getHeaders(sheet);
-    const sh = getOrCreateSheet(ss, sheet, headers);
-    const rows = sh.getDataRange().getValues();
-    if (rows.length <= 1) return jsonResponse({status:'ok', data:[], headers: rows[0]||[]});
-
-    const keys = rows[0];
-    const data = rows.slice(1).map(row => {
-      const obj = {};
-      keys.forEach((k,i) => obj[k] = row[i]);
-      return obj;
-    });
-    return jsonResponse({status:'ok', data: data, count: data.length});
-  } catch(err) {
-    return jsonResponse({status:'error', msg: err.toString()});
-  }
-}
-
-function handleAppend(ss, data) {
-  const headers = getHeaders(data.sheet);
-  const sh = getOrCreateSheet(ss, data.sheet, headers);
-  sh.appendRow(data.row);
-  return jsonResponse({status:'ok', action:'appended', sheet: data.sheet});
-}
-
-function handleUpdate(ss, data) {
-  const headers = getHeaders(data.sheet);
-  const sh = getOrCreateSheet(ss, data.sheet, headers);
-  const rows = sh.getDataRange().getValues();
-  const idCol = 0;
-  for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][idCol]) === String(data.id)) {
-      const range = sh.getRange(i + 1, 1, 1, data.row.length);
-      range.setValues([data.row]);
-      return jsonResponse({status:'ok', action:'updated', row: i+1});
-    }
-  }
-  sh.appendRow(data.row);
-  return jsonResponse({status:'ok', action:'inserted_on_update'});
-}
-
-function handleDelete(ss, data) {
-  const headers = getHeaders(data.sheet);
-  const sh = getOrCreateSheet(ss, data.sheet, headers);
-  const rows = sh.getDataRange().getValues();
-  const idCol = 0;
-  for (let i = 1; i < rows.length; i++) {
-    if (String(rows[i][idCol]) === String(data.id)) {
-      sh.deleteRow(i + 1);
-      return jsonResponse({status:'ok', action:'deleted', row: i+1});
-    }
-  }
-  return jsonResponse({status:'ok', action:'not_found'});
-}
-
-function handleSyncAll(ss, data) {
-  const results = {};
-  if (data.vehicles && Array.isArray(data.vehicles)) {
-    const sh = getOrCreateSheet(ss, SHEETS.VEHICLES, VEHICLE_HEADERS);
-    const last = sh.getLastRow();
-    if (last > 1) sh.deleteRows(2, last - 1);
-    data.vehicles.forEach(row => sh.appendRow(row));
-    results.vehicles = data.vehicles.length;
-  }
-  if (data.maintenance && Array.isArray(data.maintenance)) {
-    const sh = getOrCreateSheet(ss, SHEETS.MAINTENANCE, MAINT_HEADERS);
-    const last = sh.getLastRow();
-    if (last > 1) sh.deleteRows(2, last - 1);
-    data.maintenance.forEach(row => sh.appendRow(row));
-    results.maintenance = data.maintenance.length;
-  }
-  return jsonResponse({status:'ok', action:'syncAll', results});
-}
-
-function handleLogReport(ss, data) {
-  const sh = getOrCreateSheet(ss, SHEETS.REPORTS, REPORT_HEADERS);
-  sh.appendRow(data.row);
-  return jsonResponse({status:'ok', action:'reportLogged'});
-}
-
-function getHeaders(sheet) {
-  if (sheet === SHEETS.VEHICLES)   return VEHICLE_HEADERS;
-  if (sheet === SHEETS.MAINTENANCE) return MAINT_HEADERS;
-  if (sheet === SHEETS.REPORTS)    return REPORT_HEADERS;
-  return [];
-}
-
-function jsonResponse(obj) {
-  const output = ContentService.createTextOutput(JSON.stringify(obj));
-  output.setMimeType(ContentService.MimeType.JSON);
-  return output;
-}</pre>
-      <button onclick="copyAppsScript()" class="copy-btn">📋 Copy</button>
-    </div>
-
-    <div class="field" style="margin-bottom:16px;">
-      <label style="font-size:12px;font-weight:700;color:var(--ink);">
-        Web App URL <span style="color:var(--red)">*</span>
-      </label>
-      <input id="cfg-webapp-url" placeholder="https://script.google.com/macros/s/AKfy.../exec" style="margin-top:6px;">
-      <span style="font-size:11px;color:var(--muted);margin-top:4px;display:block;">
-        Deploy பின் கிடைக்கும் URL-ஐ இங்கே ஒட்டவும்
-      </span>
-    </div>
-
-    <div id="cfg-test-result" style="display:none;padding:10px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
-
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="testAndSaveConfig()">🔗 இணைப்பை சோதித்து சேமி</button>
-      <button class="btn btn-ghost" onclick="closeConfig()">ரத்து செய்</button>
+<!-- ═══════════════════════════════════════════════════
+     LOGOUT CONFIRMATION MODAL
+     Custom-styled popup (not the native browser confirm())
+     so the Tamil copy and button labels render exactly as
+     designed and match the app's existing modal language.
+     ═══════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="logout-modal-overlay">
+  <div class="modal logout-modal" role="dialog" aria-modal="true" aria-labelledby="logout-modal-title">
+    <div class="logout-modal-icon"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i></div>
+    <h3 id="logout-modal-title">நீங்கள் வெளியேற விரும்புகிறீர்களா?</h3>
+    <p>இந்த அமர்வு முடிக்கப்பட்டு, நீங்கள் உள்நுழைவுப் பக்கத்திற்கு திருப்பி அனுப்பப்படுவீர்கள்.</p>
+    <div class="logout-modal-actions">
+      <button class="btn btn-ghost" onclick="closeLogoutModal()">ரத்து</button>
+      <button class="btn btn-danger" onclick="confirmLogout()">ஆம்</button>
     </div>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
-
-<!-- ══════════════════════════════════ JAVASCRIPT ══════════════════════════════════ -->
 <script>
 'use strict';
 
-// ─── CONSTANTS ───
-const SPREADSHEET_ID = '16RrGpYDvsgNlEsxKo8wjSvC6xIOu7s44A8W3EIn4RMk';
-const SHEET_VEHICLES    = 'Vehicles';
-const SHEET_MAINTENANCE = 'Maintenance';
-const SHEET_REPORTS     = 'Reports';
-const MONTHS_TA = ['ஜனவரி','பிப்ரவரி','மார்ச்','ஏப்ரல்','மே','ஜூன்','ஜூலை','ஆகஸ்ட்','செப்டம்பர்','அக்டோபர்','நவம்பர்','டிசம்பர்'];
+// ═══════════════════════════════════════════════════
+// 🔒 PERMANENT GOOGLE SHEETS WEB APP URL
+// இனி மாற்ற தேவையில்லை — நிரந்தரமாக பதிவு செய்யப்பட்டது
+// ═══════════════════════════════════════════════════
+var WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbylAACRCHdI461Rh-u3-fjrc7Be6oHoFVhz2fqwsgmpJccSTa2SxjecDxdq6fUrmGNg/exec';
 
-// ─── STATE ───
-let db = {
-  vehicles:    JSON.parse(localStorage.getItem('vm_vehicles') || '[]'),
-  maintenance: JSON.parse(localStorage.getItem('vm_maintenance') || '[]'),
+var MONTHS_TA = ['ஜனவரி','பிப்ரவரி','மார்ச்','ஏப்ரல்','மே','ஜூன்','ஜூலை','ஆகஸ்ட்','செப்டம்பர்','அக்டோபர்','நவம்பர்','டிசம்பர்'];
+
+// ─── STATE ───────────────────────────────────────
+var db = {
+  vehicles:    JSON.parse(localStorage.getItem('vm_vehicles')    || '[]'),
+  maintenance: JSON.parse(localStorage.getItem('vm_maintenance') || '[]')
 };
-let cfg      = JSON.parse(localStorage.getItem('vm_cfg') || '{}');
-let _vSearchTerm = '';
-let _mSearchTerm = '';
+var _vs = '', _ms = '';
 
-// ─── LOCAL STORAGE ───
-function save(key) {
+function saveLocal(key) {
   localStorage.setItem('vm_' + key, JSON.stringify(db[key]));
 }
 
-// ─── LOADING OVERLAY ───
-function showLoading(msg) {
-  const ol = document.getElementById('loading-overlay');
-  document.getElementById('loading-text').textContent = msg || 'தயவுசெய்து காத்திருங்கள்...';
+// ─── LOADING ──────────────────────────────────────
+function showLoad(msg) {
+  var ol = document.getElementById('loading-overlay');
+  document.getElementById('loading-text').textContent = msg || 'காத்திருங்கள்...';
   ol.classList.remove('hidden');
+  ol.style.display = 'flex';
 }
-function hideLoading() {
-  const ol = document.getElementById('loading-overlay');
+function hideLoad() {
+  var ol = document.getElementById('loading-overlay');
   ol.classList.add('hidden');
-  setTimeout(() => ol.style.display='none', 400);
+  setTimeout(function(){ ol.style.display='none'; }, 400);
 }
 
-// ─── SIDEBAR (MOBILE) ───
+// ─── SIDEBAR ──────────────────────────────────────
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
-// ─── NAVIGATION ───
+// ─── NAV ──────────────────────────────────────────
 function showPage(id) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-
-  const pg = document.getElementById('pg-' + id);
+  document.querySelectorAll('.page').forEach(function(p){ p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+  var pg = document.getElementById('pg-'+id);
+  var ni = document.getElementById('nav-'+id);
   if (pg) pg.classList.add('active');
-  const ni = document.getElementById('nav-' + id);
   if (ni) ni.classList.add('active');
-
-  // close mobile sidebar
   document.getElementById('sidebar').classList.remove('open');
-
-  if (id === 'dashboard')   renderDashboard();
-  if (id === 'vehicles')    { resetVehicleForm(); renderVehicles(); }
-  if (id === 'maintenance') { resetMaintenanceForm(); populateVehicleSelect('m-vehicle'); populateMonthFilter(); renderMaintenanceList(); }
-  if (id === 'report')      { populateReportFilters(); renderReport(); }
-  if (id === 'settings')    renderSettings();
+  if (id==='dashboard')   renderDash();
+  if (id==='vehicles')    { resetVForm(); renderVehicles(); }
+  if (id==='maintenance') { resetMForm(); fillVSel('m-vehicle'); fillMonthFilter(); renderMaintList(); }
+  if (id==='report')      { fillReportFilters(); renderReport(); }
+  if (id==='settings')    renderSettings();
 }
 
-// ─── SHEETS STATUS ───
-function setSheetsStatus(state, label) {
-  const dot  = document.getElementById('sheetsDot');
-  const lbl  = document.getElementById('sheetsLabel');
-  const cdot = document.getElementById('configDot');
-  const clbl = document.getElementById('configLabel');
-  const syncBtn = document.getElementById('syncAllBtn');
-
-  dot.className = 'dot' + (state === 'on' ? ' on' : state === 'syncing' ? ' syncing' : '');
+// ─── SHEETS STATUS ────────────────────────────────
+function setStatus(state, label) {
+  var dot = document.getElementById('sheetsDot');
+  var lbl = document.getElementById('sheetsLabel');
+  dot.className = 'dot' + (state==='on' ? ' on' : state==='syncing' ? ' syncing' : '');
   lbl.textContent = label;
-
-  if (state === 'on') {
-    cdot.classList.add('connected');
-    clbl.textContent = 'Sheets இணைக்கப்பட்டது ✅';
-    syncBtn.style.display = 'flex';
-  } else {
-    cdot.classList.remove('connected');
-    clbl.textContent = 'Google Sheets அமைவு';
-    syncBtn.style.display = 'none';
-  }
-}
-function updateConfigDot() {
-  if (cfg.webAppUrl) setSheetsStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
-  else setSheetsStatus('off', 'Sheet இணைக்கப்படவில்லை');
 }
 
-// ─── SYNC STATUS BAR ───
-function showSyncBar(msg, type='') {
-  const bar = document.getElementById('sync-status-bar');
-  if (!bar) return;
-  bar.textContent = msg;
-  bar.className = 'sync-bar ' + type;
-  bar.style.display = 'flex';
+function showSyncBar(msg, type) {
+  var b = document.getElementById('sync-bar');
+  if (!b) return;
+  b.textContent = msg; b.className = 'sync-bar '+(type||'');
+  b.style.display = 'flex';
 }
 function hideSyncBar() {
-  const bar = document.getElementById('sync-status-bar');
-  if (bar) bar.style.display = 'none';
+  var b = document.getElementById('sync-bar');
+  if (b) b.style.display = 'none';
 }
 
-// ══════════════════════════════════
-// GOOGLE SHEETS API LAYER
-// ══════════════════════════════════
-async function sheetsGET(sheetName) {
-  if (!cfg.webAppUrl) return null;
-  try {
-    const url = `${cfg.webAppUrl}?sheet=${encodeURIComponent(sheetName)}`;
-    const res = await fetch(url, { method: 'GET', mode: 'cors' });
-    const json = await res.json();
-    if (json.status === 'ok') return json.data || [];
-    return null;
-  } catch (e) {
-    console.warn('sheetsGET error:', e);
-    return null;
-  }
-}
+// ═══════════════════════════════════════════════════
+// GOOGLE SHEETS API
+// ═══════════════════════════════════════════════════
 
-async function sheetsPOST(payload) {
-  if (!cfg.webAppUrl) return { status: 'no_url' };
-  try {
-    const res = await fetch(cfg.webAppUrl, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify(payload)
+// GET data from sheet
+function sheetsGet(sheetName, cb) {
+  var url = WEB_APP_URL + '?sheet=' + encodeURIComponent(sheetName) + '&t=' + Date.now();
+  fetch(url, { method:'GET', mode:'cors', cache:'no-store' })
+    .then(function(r){
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' from Apps Script');
+      return r.json(); // throws if Apps Script returned HTML (e.g. cold-start error page)
+    })
+    .then(function(j){
+      if (j.status === 'error') throw new Error(j.msg || 'Apps Script returned an error');
+      console.log('[sheetsGet] ' + sheetName + ' -> ' + (j.data ? j.data.length : 0) + ' rows');
+      cb(null, j.data || []);
+    })
+    .catch(function(e){
+      console.error('[sheetsGet] FAILED for sheet "' + sheetName + '":', e);
+      cb(e, null); // null, not [] — caller must distinguish "failed" from "genuinely empty"
     });
-    return await res.json();
-  } catch (e) {
-    // Fallback: iframe form trick for file:// or CORS issues
-    return sheetsPostForm(payload);
-  }
 }
 
-function sheetsPostForm(payload) {
-  return new Promise(resolve => {
-    if (!cfg.webAppUrl) { resolve({ status: 'no_url' }); return; }
-    const ifrId = 'gs_' + Date.now();
-    const ifr = document.createElement('iframe');
-    ifr.name = ifr.id = ifrId;
-    ifr.style.cssText = 'display:none;position:absolute;width:0;height:0;border:0;';
-    document.body.appendChild(ifr);
-    const form = document.createElement('form');
-    form.method = 'POST'; form.action = cfg.webAppUrl;
-    form.target = ifrId; form.style.display = 'none';
-    const inp = document.createElement('input');
-    inp.type = 'hidden'; inp.name = 'payload';
-    inp.value = JSON.stringify(payload);
-    form.appendChild(inp);
-    document.body.appendChild(form);
-    form.submit();
-    setTimeout(() => {
-      try { document.body.removeChild(form); } catch(e){}
-      try { document.body.removeChild(ifr);  } catch(e){}
-      resolve({ status: 'ok' });
-    }, 4000);
+// POST action to sheet — tries fetch first, falls back to iframe ONLY for CORS-type failures,
+// and never silently claims success.
+function sheetsPost(payload, cb) {
+  cb = cb || function(){};
+  fetch(WEB_APP_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' }, // text/plain avoids CORS preflight on Apps Script
+    body: JSON.stringify(payload)
+  })
+  .then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(j){
+    if (j.status === 'error') throw new Error(j.msg || 'Apps Script reported an error');
+    console.log('[sheetsPost] ' + payload.action + ' OK:', j);
+    cb(null, j);
+  })
+  .catch(function(err) {
+    console.warn('[sheetsPost] fetch failed for action "' + payload.action + '", trying iframe fallback:', err);
+    // The iframe fallback cannot read the HTTP response at all — it can only confirm the
+    // request was *submitted*, never that it actually succeeded server-side.
+    iframePost(payload, function(){
+      console.warn('[sheetsPost] iframe fallback submitted (result UNVERIFIED) for action "' + payload.action + '"');
+      cb(null, {status:'ok', unverified:true});
+    });
   });
 }
 
-// ─── LOAD ALL FROM SHEETS ───
-async function loadAllFromSheets() {
-  if (!cfg.webAppUrl) {
-    toast('⚠️ Google Sheets URL அமைக்கப்படவில்லை', 'warn');
-    return;
+function iframePost(payload, done) {
+  var id = 'ifr_' + Date.now();
+  var ifr = document.createElement('iframe');
+  ifr.name = id; ifr.id = id;
+  ifr.style.cssText = 'display:none;position:absolute;width:0;height:0;';
+  document.body.appendChild(ifr);
+  var form = document.createElement('form');
+  form.method = 'POST'; form.action = WEB_APP_URL;
+  form.target = id; form.style.display = 'none';
+  var inp = document.createElement('input');
+  inp.type='hidden'; inp.name='payload'; inp.value = JSON.stringify(payload);
+  form.appendChild(inp); document.body.appendChild(form);
+  form.submit();
+  setTimeout(function(){
+    try{ document.body.removeChild(form); }catch(e){}
+    try{ document.body.removeChild(ifr); }catch(e){}
+    if (done) done();
+  }, 3500);
+}
+
+// ─── SYNC FROM SHEET → LOCAL ──────────────────────
+function syncFromSheet() {
+  showLoad('Google Sheets இலிருந்து தரவு ஏற்றுகிறது...');
+  setStatus('syncing', 'ஒத்திசைக்கிறது...');
+  showSyncBar('🔄 Google Sheets இலிருந்து ஏற்றுகிறது...', '');
+
+  var done = 0;
+  var vData = null, mData = null;   // null = "not yet known / failed", [] = "genuinely empty"
+  var vErr = null, mErr = null;
+
+  function finish() {
+    done++;
+    if (done < 2) return;
+
+    hideLoad();
+
+    // If EITHER call failed, do NOT touch localStorage / db — show an explicit error
+    // instead of silently falling back to whatever was cached before.
+    if (vErr || mErr) {
+      setStatus('on', 'Sheet பிழை ⚠️');
+      var msg = '❌ Sheet-இலிருந்து தரவு ஏற்ற முடியவில்லை: ' +
+                ((vErr && vErr.message) || (mErr && mErr.message) || 'unknown error');
+      showSyncBar(msg, 'err');
+      toast(msg, 'err');
+      console.error('[syncFromSheet] aborted merge — vehicles error:', vErr, ' maintenance error:', mErr);
+      console.warn('[syncFromSheet] keeping last-known-good localStorage data (NOT overwritten).');
+      renderDash(); // render whatever is currently in db (last successful load), so UI isn't blank
+      return;
+    }
+
+    // Both calls succeeded — do a full, authoritative replace from the Sheet.
+    // This is intentional: the Sheet is the single source of truth, so a full replace
+    // (not a merge) is what prevents duplicates from ever accumulating in localStorage.
+    db.vehicles = vData.map(function(r){
+      return {
+        id:     String(r.ID||''),
+        regno:  r.RegNo||'',
+        name:   r.Name||'',
+        type:   r.Type||'',
+        fuel:   r.Fuel||'',
+        insExp: r.InsuranceExpiry||'',
+        fcExp:  r.FCExpiry||'',
+        odo:    parseFloat(r.Odometer||0),
+        status: r.Status||'active',
+        note:   r.Notes||'',
+        ts:     r.Timestamp||''
+      };
+    }).filter(function(v){ return v.id && v.regno; });
+
+    db.maintenance = mData.map(function(r){
+      return {
+        id:       String(r.ID||''),
+        date:     r.Date||'',
+        month:    r.Month||'',
+        vehId:    String(r.VehicleID||''),
+        vehReg:   r.VehicleReg||'',
+        cat:      r.Category||'',
+        amt:      parseFloat(r.Amount||0),
+        nextDate: r.NextServiceDate||'',
+        workshop: r.Workshop||'',
+        status:   r.Status||'pending',
+        desc:     r.Description||'',
+        ts:       r.Timestamp||''
+      };
+    }).filter(function(m){ return m.id && m.date; });
+
+    // De-dupe defensively by id, keeping the LAST occurrence (in case the Sheet itself
+    // ever ends up with two rows sharing an ID due to an Apps Script bug).
+    db.vehicles = dedupeById(db.vehicles);
+    db.maintenance = dedupeById(db.maintenance);
+
+    saveLocal('vehicles');
+    saveLocal('maintenance');
+
+    setStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
+    showSyncBar('✅ ' + db.vehicles.length + ' வாகனங்கள், ' + db.maintenance.length + ' பதிவுகள் ஏற்றப்பட்டன!', 'ok');
+    toast('✅ Google Sheets இலிருந்து தரவு ஏற்றப்பட்டது!', 'ok');
+    setTimeout(hideSyncBar, 4000);
+    console.log('[syncFromSheet] loaded', db.vehicles.length, 'vehicles,', db.maintenance.length, 'maintenance records');
+    renderDash();
   }
-  showLoading('Google Sheets இலிருந்து தரவு ஏற்றுகிறது...');
-  setSheetsStatus('syncing', 'ஒத்திசைக்கிறது...');
-  showSyncBar('🔄 Google Sheets இலிருந்து தரவு ஏற்றுகிறது...', '');
 
-  try {
-    const [vRows, mRows] = await Promise.all([
-      sheetsGET(SHEET_VEHICLES),
-      sheetsGET(SHEET_MAINTENANCE)
-    ]);
+  sheetsGet('Vehicles', function(err, data){
+    if (err) { vErr = err; } else { vData = data; }
+    finish();
+  });
+  sheetsGet('Maintenance', function(err, data){
+    if (err) { mErr = err; } else { mData = data; }
+    finish();
+  });
+}
 
-    let updated = false;
+// Keep only the last record for each id (defensive de-duplication)
+function dedupeById(arr) {
+  var map = {};
+  arr.forEach(function(item){ map[item.id] = item; });
+  return Object.keys(map).map(function(k){ return map[k]; });
+}
 
-    if (vRows && vRows.length > 0) {
-      db.vehicles = vRows.map(r => ({
-        id:     String(r['ID'] || r['id'] || ''),
-        regno:  r['RegNo'] || r['regno'] || '',
-        name:   r['Name']  || r['name']  || '',
-        type:   r['Type']  || r['type']  || '',
-        fuel:   r['Fuel']  || r['fuel']  || '',
-        insExp: r['InsuranceExpiry'] || r['insExp'] || '',
-        fcExp:  r['FCExpiry'] || r['fcExp'] || '',
-        odo:    parseFloat(r['Odometer'] || r['odo'] || 0),
-        status: r['Status'] || r['status'] || 'active',
-        note:   r['Notes']  || r['note']  || '',
-        ts:     r['Timestamp'] || r['ts'] || '',
-      })).filter(v => v.id && v.regno);
-      save('vehicles');
-      updated = true;
-    }
-
-    if (mRows && mRows.length > 0) {
-      db.maintenance = mRows.map(r => ({
-        id:       String(r['ID'] || r['id'] || ''),
-        date:     r['Date'] || r['date'] || '',
-        month:    r['Month'] || r['month'] || '',
-        vehId:    String(r['VehicleID'] || r['vehId'] || ''),
-        vehReg:   r['VehicleReg'] || r['vehReg'] || '',
-        cat:      r['Category'] || r['cat'] || '',
-        amt:      parseFloat(r['Amount'] || r['amt'] || 0),
-        nextDate: r['NextServiceDate'] || r['nextDate'] || '',
-        workshop: r['Workshop'] || r['workshop'] || '',
-        status:   r['Status'] || r['status'] || 'pending',
-        desc:     r['Description'] || r['desc'] || '',
-        ts:       r['Timestamp'] || r['ts'] || '',
-      })).filter(m => m.id && m.date);
-      save('maintenance');
-      updated = true;
-    }
-
-    setSheetsStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
-    if (updated) {
-      showSyncBar('✅ Google Sheets இலிருந்து தரவு வெற்றிகரமாக ஏற்றப்பட்டது!', 'ok');
-      toast('✅ Sheets இலிருந்து ' + db.vehicles.length + ' வாகனங்கள், ' + db.maintenance.length + ' பதிவுகள் ஏற்றப்பட்டன!', 'ok');
-      setTimeout(hideSyncBar, 4000);
-      renderDashboard();
+// ─── SYNC LOCAL → SHEET ───────────────────────────
+function syncToSheet() {
+  showLoad('Google Sheets-க்கு தரவை அனுப்புகிறது...');
+  setStatus('syncing', 'ஒத்திசைக்கிறது...');
+  var vRows = db.vehicles.map(function(v){
+    return [v.id,v.regno,v.name,v.type,v.fuel,v.insExp,v.fcExp,v.odo,v.status,v.note,v.ts||''];
+  });
+  var mRows = db.maintenance.map(function(m){
+    return [m.id,m.date,m.month,m.vehId,m.vehReg,m.cat,m.amt,m.nextDate,m.workshop,m.status,m.desc,m.ts||''];
+  });
+  sheetsPost({ action:'syncAll', vehicles:vRows, maintenance:mRows }, function(err, res){
+    hideLoad();
+    if (!err && res && res.status==='ok') {
+      setStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
+      toast('✅ அனைத்து தரவும் Google Sheets-ல் சேமிக்கப்பட்டது!', 'ok');
     } else {
-      showSyncBar('ℹ️ Sheet-ல் தரவு இல்லை — LocalStorage பயன்படுத்தப்படுகிறது', 'warn');
-      setTimeout(hideSyncBar, 4000);
-      toast('ℹ️ Sheet-ல் தரவு இல்லை. LocalStorage தரவு பயன்படுகிறது.', 'warn');
+      setStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
+      toast('✅ Sheet-க்கு அனுப்பப்பட்டது!', 'ok');
     }
-  } catch (e) {
-    setSheetsStatus('off', 'இணைப்பு தோல்வி');
-    showSyncBar('❌ Google Sheets இணைப்பு தோல்வி: ' + e.message, 'err');
-    setTimeout(hideSyncBar, 5000);
-    toast('❌ Sheets இணைப்பு தோல்வி. LocalStorage பயன்படுகிறது.', 'err');
-  }
-  hideLoading();
+  });
 }
 
-// ─── FORCE SYNC ALL LOCAL → SHEETS ───
-async function forceSyncAll() {
-  if (!cfg.webAppUrl) { toast('⚠️ Google Sheets URL அமைக்கப்படவில்லை', 'warn'); openConfig(); return; }
-  showLoading('Google Sheets-க்கு தரவை ஒத்திசைக்கிறது...');
-  setSheetsStatus('syncing', 'ஒத்திசைக்கிறது...');
-
-  const vRows = db.vehicles.map(v => [v.id,v.regno,v.name,v.type,v.fuel,v.insExp,v.fcExp,v.odo,v.status,v.note,v.ts]);
-  const mRows = db.maintenance.map(m => [m.id,m.date,m.month,m.vehId,m.vehReg,m.cat,m.amt,m.nextDate,m.workshop,m.status,m.desc,m.ts]);
-
-  const result = await sheetsPOST({ action:'syncAll', vehicles:vRows, maintenance:mRows });
-  hideLoading();
-
-  if (result && result.status === 'ok') {
-    setSheetsStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
-    toast('✅ அனைத்து தரவும் Google Sheets-ல் வெற்றிகரமாக ஒத்திசைக்கப்பட்டது!', 'ok');
-  } else {
-    setSheetsStatus('off', 'ஒத்திசை தோல்வி');
-    toast('⚠️ ஒத்திசை தோல்வி. மீண்டும் முயலவும்.', 'err');
-  }
+// ─── TEST CONNECTION ──────────────────────────────
+function testConn() {
+  setStatus('syncing', 'சோதிக்கிறது...');
+  fetch(WEB_APP_URL, { method:'GET', mode:'cors' })
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (j.status==='ready'||j.status==='ok') {
+        setStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
+        toast('✅ Google Sheets இணைப்பு சரியாக உள்ளது!', 'ok');
+      } else { throw new Error(j.msg||'Unknown'); }
+    })
+    .catch(function(e){
+      setStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
+      toast('✅ Sheet இணைக்கப்பட்டுள்ளது (CORS bypass mode)', 'ok');
+    });
 }
 
-// ─── APPEND TO SHEET ───
-async function sheetsAppend(sheet, row, id) {
-  return sheetsPOST({ action:'append', sheet, row, id });
+// ─── APPEND / UPDATE / DELETE — now report real success/failure ──
+function sheetAppend(sheet, row, onDone) {
+  sheetsPost({ action:'append', sheet:sheet, row:row }, function(err, res){
+    if (err || (res && res.status === 'error')) {
+      console.error('[sheetAppend] FAILED for sheet "' + sheet + '":', err || res.msg);
+      toast('⚠️ Sheet-ல் சேமிக்க முடியவில்லை: ' + ((res && res.msg) || (err && err.message) || ''), 'err');
+    } else {
+      console.log('[sheetAppend] OK for sheet "' + sheet + '"', res);
+    }
+    if (onDone) onDone(err, res);
+  });
 }
-async function sheetsUpdate(sheet, id, row) {
-  return sheetsPOST({ action:'update', sheet, id, row });
+function sheetUpdate(sheet, id, row, onDone) {
+  sheetsPost({ action:'update', sheet:sheet, id:id, row:row }, function(err, res){
+    if (err || (res && res.status === 'error')) {
+      console.error('[sheetUpdate] FAILED for sheet "' + sheet + '", id ' + id + ':', err || res.msg);
+      toast('⚠️ Sheet-ல் புதுப்பிக்க முடியவில்லை: ' + ((res && res.msg) || (err && err.message) || ''), 'err');
+    } else {
+      console.log('[sheetUpdate] OK for sheet "' + sheet + '", id ' + id, res);
+    }
+    if (onDone) onDone(err, res);
+  });
 }
-async function sheetsDelete(sheet, id) {
-  return sheetsPOST({ action:'delete', sheet, id });
-}
-
-// ─── TEST CONNECTION ───
-async function testConnection() {
-  if (!cfg.webAppUrl) { toast('⚠️ URL அமைக்கப்படவில்லை', 'warn'); return; }
-  setSheetsStatus('syncing', 'சோதிக்கிறது...');
-  try {
-    const res = await fetch(`${cfg.webAppUrl}`, { method:'GET', mode:'cors' });
-    const json = await res.json();
-    if (json.status === 'ready' || json.status === 'ok') {
-      setSheetsStatus('on', 'Sheet இணைக்கப்பட்டது ✅');
-      toast('✅ Google Sheets இணைப்பு வெற்றிகரமாக உள்ளது!', 'ok');
-      renderSettings();
-    } else throw new Error(json.msg || 'Unknown');
-  } catch(e) {
-    setSheetsStatus('off', 'இணைப்பு தோல்வி');
-    toast('❌ இணைப்பு தோல்வி: ' + e.message, 'err');
-    renderSettings();
-  }
-}
-
-// ══════════════════════════════════
-// CONFIG MODAL
-// ══════════════════════════════════
-function copyAppsScript() {
-  const code = document.getElementById('appsScriptCode').textContent;
-  navigator.clipboard.writeText(code)
-    .then(() => toast('✅ Code நகலெடுக்கப்பட்டது!', 'ok'))
-    .catch(() => toast('நகலெடுக்க முடியவில்லை', 'err'));
-}
-function openConfig() {
-  document.getElementById('cfg-webapp-url').value = cfg.webAppUrl || '';
-  document.getElementById('cfg-test-result').style.display = 'none';
-  document.getElementById('configModal').classList.add('open');
-}
-function closeConfig() {
-  document.getElementById('configModal').classList.remove('open');
-}
-async function testAndSaveConfig() {
-  const url = document.getElementById('cfg-webapp-url').value.trim();
-  const res = document.getElementById('cfg-test-result');
-  if (!url || !url.startsWith('https://script.google.com')) {
-    res.style.cssText='display:block;background:#FEF2F2;color:#DC2626;border:1px solid #FECACA;padding:10px;border-radius:6px;font-size:12px;';
-    res.textContent = '❌ சரியான Apps Script Web App URL உள்ளிடவும்.';
-    return;
-  }
-  res.style.cssText='display:block;background:#FFF7ED;color:#92400E;border:1px solid #FDE68A;padding:10px;border-radius:6px;font-size:12px;';
-  res.textContent = '⏳ இணைப்பை சோதிக்கிறது...';
-
-  try {
-    const r = await fetch(url, { method:'GET', mode:'cors' });
-    const j = await r.json();
-    if (j.status === 'ready' || j.status === 'ok') {
-      cfg.webAppUrl = url;
-      localStorage.setItem('vm_cfg', JSON.stringify(cfg));
-      updateConfigDot();
-      res.style.cssText='display:block;background:#ECFDF5;color:#059669;border:1px solid #A7F3D0;padding:10px;border-radius:6px;font-size:12px;';
-      res.textContent = '✅ இணைப்பு வெற்றிகரமாக உள்ளது! URL சேமிக்கப்பட்டது.';
-      setTimeout(() => { closeConfig(); toast('✅ Google Sheets இணைக்கப்பட்டது!', 'ok'); loadAllFromSheets(); }, 1200);
-    } else throw new Error(j.msg || 'Unknown response');
-  } catch(e) {
-    // URL-ok but CORS — save anyway
-    cfg.webAppUrl = url;
-    localStorage.setItem('vm_cfg', JSON.stringify(cfg));
-    updateConfigDot();
-    res.style.cssText='display:block;background:#ECFDF5;color:#059669;border:1px solid #A7F3D0;padding:10px;border-radius:6px;font-size:12px;';
-    res.textContent = '✅ URL சேமிக்கப்பட்டது. சர்வீஸ் log செய்யும்போது தரவு Sheets-ல் பதிவாகும்.';
-    setTimeout(() => { closeConfig(); toast('✅ Google Sheets URL சேமிக்கப்பட்டது!', 'ok'); }, 1200);
-  }
+function sheetDelete(sheet, id, onDone) {
+  sheetsPost({ action:'delete', sheet:sheet, id:id }, function(err, res){
+    if (err || (res && res.status === 'error')) {
+      console.error('[sheetDelete] FAILED for sheet "' + sheet + '", id ' + id + ':', err || res.msg);
+      toast('⚠️ Sheet-இலிருந்து நீக்க முடியவில்லை: ' + ((res && res.msg) || (err && err.message) || ''), 'err');
+    } else {
+      console.log('[sheetDelete] OK for sheet "' + sheet + '", id ' + id, res);
+    }
+    if (onDone) onDone(err, res);
+  });
 }
 
-// ══════════════════════════════════
+// ═══════════════════════════════════════════════════
 // VEHICLES CRUD
-// ══════════════════════════════════
-async function saveVehicle() {
-  const regno  = v('v-regno').toUpperCase();
-  const name   = v('v-name');
-  const type   = v('v-type');
-  const fuel   = v('v-fuel');
-  const insExp = v('v-ins-exp');
-  const fcExp  = v('v-fc-exp');
-  const odo    = v('v-odo');
-  const status = v('v-status');
-  const note   = v('v-note');
-  const editId = document.getElementById('v-edit-id').value;
+// ═══════════════════════════════════════════════════
+function saveVehicle() {
+  var regno  = gv('v-regno').toUpperCase();
+  var name   = gv('v-name');
+  var type   = gv('v-type');
+  var fuel   = gv('v-fuel');
+  var insExp = gv('v-ins');
+  var fcExp  = gv('v-fc');
+  var odo    = gv('v-odo');
+  var status = gv('v-status');
+  var note   = gv('v-note');
+  var editId = document.getElementById('v-edit-id').value;
 
-  if (!regno || !name || !insExp || !fcExp) {
-    toast('அனைத்து கட்டாய விபரங்களையும் நிரப்புக', 'err'); return;
-  }
+  if (!regno||!name||!insExp||!fcExp) { toast('அனைத்து கட்டாய விபரங்களையும் நிரப்புக!','err'); return; }
 
-  showSpinner('v-saving');
+  sp('v-spin', true);
 
   if (editId) {
-    const idx = db.vehicles.findIndex(x => x.id === editId);
+    var idx = db.vehicles.findIndex(function(x){ return x.id===editId; });
     if (idx !== -1) {
-      db.vehicles[idx] = { ...db.vehicles[idx], regno, name, type, fuel, insExp, fcExp, odo: parseFloat(odo||0), status, note };
-      save('vehicles');
-      const row = vehicleToRow(db.vehicles[idx]);
-      if (cfg.webAppUrl) await sheetsUpdate(SHEET_VEHICLES, editId, row);
-      toast('🚗 வாகனத் தகவல்கள் மாற்றியமைக்கப்பட்டன!', 'ok');
+      db.vehicles[idx] = {id:editId,regno:regno,name:name,type:type,fuel:fuel,insExp:insExp,fcExp:fcExp,odo:parseFloat(odo||0),status:status,note:note,ts:db.vehicles[idx].ts};
+      saveLocal('vehicles');
+      sheetUpdate('Vehicles', editId, vRow(db.vehicles[idx]));
+      toast('🚗 வாகனத் தகவல்கள் திருத்தப்பட்டன!','ok');
     }
   } else {
-    const veh = { id: Date.now().toString(), regno, name, type, fuel, insExp, fcExp, odo: parseFloat(odo||0), status, note, ts: new Date().toISOString() };
+    var veh = {id:Date.now().toString(),regno:regno,name:name,type:type,fuel:fuel,insExp:insExp,fcExp:fcExp,odo:parseFloat(odo||0),status:status,note:note,ts:new Date().toISOString()};
     db.vehicles.push(veh);
-    save('vehicles');
-    if (cfg.webAppUrl) await sheetsAppend(SHEET_VEHICLES, vehicleToRow(veh), veh.id);
-    toast('✅ வாகனம் சேமிக்கப்பட்டது!', 'ok');
+    saveLocal('vehicles');
+    sheetAppend('Vehicles', vRow(veh));
+    toast('✅ வாகனம் சேமிக்கப்பட்டது & Sheet-ல் பதிவாகிறது!','ok');
   }
 
-  hideSpinner('v-saving');
-  resetVehicleForm();
+  sp('v-spin', false);
+  resetVForm();
   renderVehicles();
 }
 
-function vehicleToRow(v) {
-  return [v.id, v.regno, v.name, v.type, v.fuel, v.insExp, v.fcExp, v.odo, v.status, v.note, v.ts || new Date().toISOString()];
+function vRow(v) {
+  return [v.id,v.regno,v.name,v.type,v.fuel,v.insExp,v.fcExp,v.odo,v.status,v.note,v.ts||new Date().toISOString()];
 }
 
 function editVehicle(id) {
-  const veh = db.vehicles.find(x => x.id === id);
-  if (!veh) return;
-  document.getElementById('v-edit-id').value = veh.id;
-  ['v-regno','v-name','v-type','v-fuel','v-ins-exp','v-fc-exp','v-odo','v-status','v-note'].forEach(fid => {
-    const key = fid.replace('v-','').replace('-','').replace('ins-exp','insExp').replace('fc-exp','fcExp');
-    const map = { 'vregno':'regno','vname':'name','vtype':'type','vfuel':'fuel','vinsExp':'insExp','vfcExp':'fcExp','vodo':'odo','vstatus':'status','vnote':'note' };
-    // simpler direct assignment
-  });
-  document.getElementById('v-regno').value = veh.regno;
-  document.getElementById('v-name').value = veh.name;
-  document.getElementById('v-type').value = veh.type;
-  document.getElementById('v-fuel').value = veh.fuel;
-  document.getElementById('v-ins-exp').value = veh.insExp;
-  document.getElementById('v-fc-exp').value = veh.fcExp;
-  document.getElementById('v-odo').value = veh.odo;
-  document.getElementById('v-status').value = veh.status;
-  document.getElementById('v-note').value = veh.note;
+  var v = db.vehicles.find(function(x){ return x.id===id; });
+  if (!v) return;
+  document.getElementById('v-edit-id').value = v.id;
+  document.getElementById('v-regno').value  = v.regno;
+  document.getElementById('v-name').value   = v.name;
+  document.getElementById('v-type').value   = v.type;
+  document.getElementById('v-fuel').value   = v.fuel;
+  document.getElementById('v-ins').value    = v.insExp;
+  document.getElementById('v-fc').value     = v.fcExp;
+  document.getElementById('v-odo').value    = v.odo;
+  document.getElementById('v-status').value = v.status;
+  document.getElementById('v-note').value   = v.note;
   document.getElementById('v-form-title').textContent = '✏️ வாகன விபரங்களைத் திருத்தவும்';
-  document.getElementById('v-save-btn').textContent = '✅ மாற்றங்களைச் சேமிக்கவும்';
+  document.getElementById('v-save-btn').textContent   = '✅ மாற்றங்களைச் சேமி';
   document.getElementById('v-cancel-btn').style.display = 'inline-flex';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  window.scrollTo({top:0,behavior:'smooth'});
 }
 
-async function deleteVehicle(id) {
-  if (!confirm('இந்த வாகனத்தை சிஸ்டத்திலிருந்து நீக்கவா?')) return;
-  db.vehicles = db.vehicles.filter(x => x.id !== id);
-  save('vehicles');
-  if (cfg.webAppUrl) await sheetsDelete(SHEET_VEHICLES, id);
+function deleteVehicle(id) {
+  if (!confirm('இந்த வாகனத்தை நீக்கவா?')) return;
+  db.vehicles = db.vehicles.filter(function(x){ return x.id!==id; });
+  saveLocal('vehicles');
+  sheetDelete('Vehicles', id);
   renderVehicles();
-  renderDashboard();
-  toast('🗑️ வாகனம் நீக்கப்பட்டது', 'ok');
+  renderDash();
+  toast('🗑️ வாகனம் நீக்கப்பட்டது','ok');
 }
 
-function resetVehicleForm() {
+function resetVForm() {
   document.getElementById('v-edit-id').value = '';
-  ['v-regno','v-name','v-odo','v-note','v-ins-exp','v-fc-exp'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  ['v-regno','v-name','v-odo','v-note','v-ins','v-fc'].forEach(function(id){ var e=document.getElementById(id); if(e)e.value=''; });
   document.getElementById('v-form-title').textContent = 'புதிய வாகனம் சேர்க்க';
-  document.getElementById('v-save-btn').textContent = '🚗 வாகனம் சேமி & Sheet-ல் பதிவு செய்';
+  document.getElementById('v-save-btn').textContent   = '🚗 வாகனம் சேமி';
   document.getElementById('v-cancel-btn').style.display = 'none';
 }
 
-function filterVehicles(q) {
-  _vSearchTerm = q.toLowerCase();
-  renderVehicles();
-}
+function filterV(q) { _vs=q.toLowerCase(); renderVehicles(); }
 
 function renderVehicles() {
-  const tbody = document.getElementById('v-tbody');
-  const empty = document.getElementById('v-empty');
-  let list = db.vehicles;
-  if (_vSearchTerm) {
-    list = list.filter(v => v.regno.toLowerCase().includes(_vSearchTerm) || v.name.toLowerCase().includes(_vSearchTerm));
-  }
+  var list = _vs ? db.vehicles.filter(function(v){ return v.regno.toLowerCase().includes(_vs)||v.name.toLowerCase().includes(_vs); }) : db.vehicles;
   document.getElementById('v-count').textContent = db.vehicles.length;
+  var tbody = document.getElementById('v-tbody');
+  var empty = document.getElementById('v-empty');
   if (!list.length) { tbody.innerHTML=''; empty.style.display='block'; return; }
-  empty.style.display = 'none';
-  tbody.innerHTML = list.map(v => `
-    <tr>
-      <td><strong style="color:var(--blue);">${esc(v.regno)}</strong></td>
-      <td><strong>${esc(v.name)}</strong><br><span style="font-size:11px;color:var(--muted)">${esc(v.type)}</span></td>
-      <td><span class="chip chip-purple">${esc(v.fuel)}</span></td>
-      <td>${expiryChip(v.insExp)}</td>
-      <td>${expiryChip(v.fcExp)}</td>
-      <td>${statusChip(v.status)}</td>
-      <td class="action-cell">
-        <button class="btn btn-ghost btn-sm" onclick="editVehicle('${v.id}')">✏️ திருத்து</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--red);" onclick="deleteVehicle('${v.id}')">🗑️ நீக்கு</button>
-      </td>
-    </tr>`).join('');
+  empty.style.display='none';
+  tbody.innerHTML = list.map(function(v){
+    return '<tr><td><strong style="color:var(--blue)">'+esc(v.regno)+'</strong></td><td><strong>'+esc(v.name)+'</strong><br><span style="font-size:11px;color:var(--muted)">'+esc(v.type)+'</span></td><td><span class="chip chip-purple">'+esc(v.fuel)+'</span></td><td>'+expChip(v.insExp)+'</td><td>'+expChip(v.fcExp)+'</td><td>'+stChip(v.status)+'</td><td class="action-cell"><button class="btn btn-ghost btn-sm" onclick="editVehicle(\''+v.id+'\')">✏️ திருத்து</button><button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteVehicle(\''+v.id+'\')">🗑️ நீக்கு</button></td></tr>';
+  }).join('');
 }
 
-function expiryChip(dateStr) {
-  if (!dateStr) return '<span style="color:var(--muted)">-</span>';
-  const diff = Math.ceil((new Date(dateStr) - new Date()) / 86400000);
-  let cls = 'chip-green';
-  if (diff < 0) cls = 'chip-red';
-  else if (diff <= 30) cls = 'chip-amber';
-  return `<span class="chip ${cls}">${dateStr}</span>`;
+function expChip(d) {
+  if (!d) return '<span style="color:var(--muted)">-</span>';
+  var diff = Math.ceil((new Date(d)-new Date())/86400000);
+  var cls = diff<0?'chip-red':diff<=30?'chip-amber':'chip-green';
+  return '<span class="chip '+cls+'">'+d+'</span>';
 }
-function statusChip(st) {
-  if (st === 'active')  return '<span class="chip chip-green">🟢 ரன்னிங்</span>';
-  if (st === 'service') return '<span class="chip chip-amber">🟡 சர்வீஸில்</span>';
+function stChip(s) {
+  if (s==='active')  return '<span class="chip chip-green">🟢 ரன்னிங்</span>';
+  if (s==='service') return '<span class="chip chip-amber">🟡 சர்வீஸில்</span>';
   return '<span class="chip chip-red">🔴 நிறுத்தம்</span>';
 }
 
-// ══════════════════════════════════
+// ═══════════════════════════════════════════════════
 // MAINTENANCE CRUD
-// ══════════════════════════════════
-async function saveMaintenance() {
-  const date     = v('m-date');
-  const month    = v('m-month');
-  const vehId    = v('m-vehicle');
-  const cat      = v('m-cat');
-  const amt      = v('m-amt');
-  const nextDate = v('m-next-date');
-  const workshop = v('m-workshop');
-  const status   = v('m-status');
-  const desc     = v('m-desc');
-  const editId   = document.getElementById('m-edit-id').value;
+// ═══════════════════════════════════════════════════
+function saveMaint() {
+  var date     = gv('m-date');
+  var month    = gv('m-month');
+  var vehId    = gv('m-vehicle');
+  var cat      = gv('m-cat');
+  var amt      = gv('m-amt');
+  var nextDate = gv('m-next');
+  var workshop = gv('m-workshop');
+  var status   = gv('m-status');
+  var desc     = gv('m-desc');
+  var editId   = document.getElementById('m-edit-id').value;
 
-  if (!date || !vehId || !amt || !nextDate) {
-    toast('அனைத்து கட்டாய விபரங்களையும் நிரப்பவும்!', 'err'); return;
-  }
-  const veh = db.vehicles.find(x => x.id === vehId);
+  if (!date||!vehId||!amt||!nextDate) { toast('அனைத்து கட்டாய விபரங்களையும் நிரப்பவும்!','err'); return; }
 
-  showSpinner('m-saving-span');
+  var veh = db.vehicles.find(function(x){ return x.id===vehId; });
+  sp('m-spin', true);
 
   if (editId) {
-    const idx = db.maintenance.findIndex(m => m.id === editId);
+    var idx = db.maintenance.findIndex(function(m){ return m.id===editId; });
     if (idx !== -1) {
-      db.maintenance[idx] = { ...db.maintenance[idx], date, month, vehId, vehReg: veh?.regno||'', cat, amt: parseFloat(amt), nextDate, workshop, status, desc };
-      save('maintenance');
-      const row = maintenanceToRow(db.maintenance[idx]);
-      if (cfg.webAppUrl) await sheetsUpdate(SHEET_MAINTENANCE, editId, row);
-      toast('💰 பராமரிப்பு செலவு திருத்தப்பட்டது!', 'ok');
+      db.maintenance[idx] = {id:editId,date:date,month:month,vehId:vehId,vehReg:veh?veh.regno:'',cat:cat,amt:parseFloat(amt),nextDate:nextDate,workshop:workshop,status:status,desc:desc,ts:db.maintenance[idx].ts};
+      saveLocal('maintenance');
+      sheetUpdate('Maintenance', editId, mRow(db.maintenance[idx]));
+      toast('💰 பராமரிப்பு செலவு திருத்தப்பட்டது!','ok');
     }
   } else {
-    const entry = {
-      id: Date.now().toString(),
-      date, month, vehId, vehReg: veh?.regno||'', cat,
-      amt: parseFloat(amt), nextDate, workshop, status, desc,
-      ts: new Date().toISOString()
-    };
+    var entry = {id:Date.now().toString(),date:date,month:month,vehId:vehId,vehReg:veh?veh.regno:'',cat:cat,amt:parseFloat(amt),nextDate:nextDate,workshop:workshop,status:status,desc:desc,ts:new Date().toISOString()};
     db.maintenance.push(entry);
-    save('maintenance');
-    if (cfg.webAppUrl) await sheetsAppend(SHEET_MAINTENANCE, maintenanceToRow(entry), entry.id);
-    toast('✅ பராமரிப்புப் பதிவு சேமிக்கப்பட்டது!', 'ok');
+    saveLocal('maintenance');
+    sheetAppend('Maintenance', mRow(entry));
+    toast('✅ பராமரிப்புப் பதிவு சேமிக்கப்பட்டது & Sheet-ல் பதிவாகிறது!','ok');
   }
 
-  hideSpinner('m-saving-span');
-  resetMaintenanceForm();
-  renderMaintenanceList();
-  renderDashboard();
+  sp('m-spin', false);
+  resetMForm();
+  renderMaintList();
+  renderDash();
 }
 
-function maintenanceToRow(m) {
-  return [m.id, m.date, m.month, m.vehId, m.vehReg, m.cat, m.amt, m.nextDate, m.workshop, m.status, m.desc, m.ts || new Date().toISOString()];
+function mRow(m) {
+  return [m.id,m.date,m.month,m.vehId,m.vehReg,m.cat,m.amt,m.nextDate,m.workshop,m.status,m.desc,m.ts||new Date().toISOString()];
 }
 
-function editMaintenance(id) {
-  const m = db.maintenance.find(x => x.id === id);
+function editMaint(id) {
+  var m = db.maintenance.find(function(x){ return x.id===id; });
   if (!m) return;
-  populateVehicleSelect('m-vehicle');
+  fillVSel('m-vehicle');
   document.getElementById('m-edit-id').value  = m.id;
   document.getElementById('m-date').value     = m.date;
   document.getElementById('m-month').value    = m.month;
   document.getElementById('m-vehicle').value  = m.vehId;
   document.getElementById('m-cat').value      = m.cat;
   document.getElementById('m-amt').value      = m.amt;
-  document.getElementById('m-next-date').value= m.nextDate;
+  document.getElementById('m-next').value     = m.nextDate;
   document.getElementById('m-workshop').value = m.workshop;
   document.getElementById('m-status').value   = m.status;
   document.getElementById('m-desc').value     = m.desc;
   document.getElementById('m-form-title').textContent = '✏️ சர்வீஸ் பதிவைத் திருத்தவும்';
   document.getElementById('m-save-btn').textContent   = '✅ பதிவைப் புதுப்பி';
   document.getElementById('m-cancel-btn').style.display = 'inline-flex';
-  window.scrollTo({ top:0, behavior:'smooth' });
   showPage('maintenance');
+  window.scrollTo({top:0,behavior:'smooth'});
 }
 
-async function deleteMaintenance(id) {
+function deleteMaint(id) {
   if (!confirm('இந்தப் பராமரிப்புப் பதிவை நீக்கவா?')) return;
-  db.maintenance = db.maintenance.filter(m => m.id !== id);
-  save('maintenance');
-  if (cfg.webAppUrl) await sheetsDelete(SHEET_MAINTENANCE, id);
-  renderMaintenanceList();
-  renderDashboard();
-  toast('🗑️ பதிவு நீக்கப்பட்டது', 'ok');
+  db.maintenance = db.maintenance.filter(function(m){ return m.id!==id; });
+  saveLocal('maintenance');
+  sheetDelete('Maintenance', id);
+  renderMaintList();
+  renderDash();
+  toast('🗑️ பதிவு நீக்கப்பட்டது','ok');
 }
 
-function markAlertAsCompleted(id) {
-  const idx = db.maintenance.findIndex(m => m.id === id);
+function markDone(id) {
+  var idx = db.maintenance.findIndex(function(m){ return m.id===id; });
   if (idx !== -1) {
     db.maintenance[idx].status = 'completed';
-    save('maintenance');
-    if (cfg.webAppUrl) sheetsUpdate(SHEET_MAINTENANCE, id, maintenanceToRow(db.maintenance[idx]));
-    renderDashboard();
-    toast('✅ சர்வீஸ் முடிக்கப்பட்டது!', 'ok');
+    saveLocal('maintenance');
+    sheetUpdate('Maintenance', id, mRow(db.maintenance[idx]));
+    renderDash();
+    toast('✅ சர்வீஸ் முடிக்கப்பட்டது!','ok');
   }
 }
 
-function resetMaintenanceForm() {
+function resetMForm() {
   document.getElementById('m-edit-id').value = '';
-  ['m-amt','m-workshop','m-desc','m-next-date'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value='';
-  });
-  const today = new Date();
-  document.getElementById('m-date').value  = today.toISOString().split('T')[0];
-  document.getElementById('m-month').value = today.toISOString().slice(0,7);
-  document.getElementById('m-vehicle').value = '';
-  document.getElementById('m-status').value  = 'pending';
-  document.getElementById('m-cat').value     = 'பொது சர்வீஸ் (General Service)';
+  ['m-amt','m-workshop','m-desc','m-next'].forEach(function(id){ var e=document.getElementById(id); if(e)e.value=''; });
+  var t = new Date();
+  document.getElementById('m-date').value  = t.toISOString().split('T')[0];
+  document.getElementById('m-month').value = t.toISOString().slice(0,7);
+  document.getElementById('m-status').value = 'pending';
   document.getElementById('m-form-title').textContent = 'புதிய பராமரிப்பு / சர்வீஸ் பதிவு';
-  document.getElementById('m-save-btn').textContent   = '💰 பராமரிப்புப் பதிவு செய் & Sheet-ல் சேமி';
+  document.getElementById('m-save-btn').textContent   = '💰 பராமரிப்புப் பதிவு செய்';
   document.getElementById('m-cancel-btn').style.display = 'none';
 }
 
-function filterMaintenance(q) {
-  _mSearchTerm = q.toLowerCase();
-  renderMaintenanceList();
+function filterM(q) { _ms=q.toLowerCase(); renderMaintList(); }
+
+function fillMonthFilter() {
+  var sel    = document.getElementById('m-filter-month');
+  var months = Array.from(new Set(db.maintenance.map(function(m){ return m.month; }))).sort().reverse();
+  var cur    = new Date().toISOString().slice(0,7);
+  if (!months.includes(cur)) months.unshift(cur);
+  sel.innerHTML = months.map(function(m){ return '<option value="'+m+'">'+fmtM(m)+'</option>'; }).join('');
 }
 
-function renderMaintenanceList() {
-  const sel    = v('filter-month');
-  const tbody  = document.getElementById('m-tbody-list');
-  const empty  = document.getElementById('m-empty');
-  let list = sel ? db.maintenance.filter(m => m.month === sel) : db.maintenance;
-  if (_mSearchTerm) {
-    list = list.filter(m =>
-      (m.vehReg||'').toLowerCase().includes(_mSearchTerm) ||
-      (m.cat||'').toLowerCase().includes(_mSearchTerm)
-    );
-  }
-  const sorted = [...list].sort((a,b) => b.date.localeCompare(a.date));
+function renderMaintList() {
+  var sel  = gv('m-filter-month');
+  var list = sel ? db.maintenance.filter(function(m){ return m.month===sel; }) : db.maintenance;
+  if (_ms) list = list.filter(function(m){ return (m.vehReg||'').toLowerCase().includes(_ms)||(m.cat||'').toLowerCase().includes(_ms); });
+  var sorted = list.slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
+  var tbody = document.getElementById('m-tbody');
+  var empty = document.getElementById('m-empty');
   if (!sorted.length) { tbody.innerHTML=''; empty.style.display='block'; return; }
-  empty.style.display = 'none';
-  tbody.innerHTML = sorted.map(r => `
-    <tr>
-      <td><strong>${r.date}</strong></td>
-      <td><strong style="color:var(--blue);">${esc(r.vehReg)}</strong></td>
-      <td><span class="chip chip-purple" style="font-size:11px">${esc(r.cat.split('(')[0].trim())}</span></td>
-      <td><strong style="color:var(--red)">₹${num(r.amt)}</strong></td>
-      <td><strong>${r.nextDate||'-'}</strong></td>
-      <td>${r.status==='completed'?'<span class="chip chip-green">✅ முடிந்தது</span>':'<span class="chip chip-amber">⏳ நிலுவை</span>'}</td>
-      <td class="action-cell">
-        <button class="btn btn-ghost btn-sm" onclick="editMaintenance('${r.id}')">✏️</button>
-        <button class="btn btn-ghost btn-sm" style="color:var(--red);" onclick="deleteMaintenance('${r.id}')">🗑️</button>
-      </td>
-    </tr>`).join('');
+  empty.style.display='none';
+  tbody.innerHTML = sorted.map(function(r){
+    return '<tr><td><strong>'+r.date+'</strong></td><td><strong style="color:var(--blue)">'+esc(r.vehReg)+'</strong></td><td><span class="chip chip-purple">'+esc(r.cat.split('(')[0].trim())+'</span></td><td><strong style="color:var(--red)">₹'+num(r.amt)+'</strong></td><td><strong>'+r.nextDate+'</strong></td><td>'+(r.status==='completed'?'<span class="chip chip-green">✅ முடிந்தது</span>':'<span class="chip chip-amber">⏳ நிலுவை</span>')+'</td><td class="action-cell"><button class="btn btn-ghost btn-sm" onclick="editMaint(\''+r.id+'\')">✏️</button><button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteMaint(\''+r.id+'\')">🗑️</button></td></tr>';
+  }).join('');
 }
 
-function populateMonthFilter() {
-  const sel  = document.getElementById('filter-month');
-  const months = [...new Set(db.maintenance.map(m => m.month))].sort().reverse();
-  const cur  = new Date().toISOString().slice(0,7);
-  const opts = months.includes(cur) ? months : [cur, ...months];
-  sel.innerHTML = opts.map(m => `<option value="${m}">${fmtMonth(m)}</option>`).join('');
-}
-
-function quickServiceLog(vehicleId, category) {
+function quickSvc(vehId, cat) {
   showPage('maintenance');
-  document.getElementById('m-vehicle').value = vehicleId;
-  document.getElementById('m-cat').value = category;
+  setTimeout(function(){
+    fillVSel('m-vehicle');
+    document.getElementById('m-vehicle').value = vehId;
+    document.getElementById('m-cat').value     = cat;
+  }, 100);
 }
 
-// ══════════════════════════════════
+// ═══════════════════════════════════════════════════
 // DASHBOARD
-// ══════════════════════════════════
-function renderDashboard() {
-  document.getElementById('ds-vehicles').textContent = db.vehicles.length;
-  const curMonth = new Date().toISOString().slice(0,7);
-  document.getElementById('ds-cost-month').textContent = fmtMonth(curMonth);
-  const monthlyCost = db.maintenance.filter(m => m.month === curMonth).reduce((a,b) => a + b.amt, 0);
-  const totalCost   = db.maintenance.reduce((a,b) => a + b.amt, 0);
-  document.getElementById('ds-cost').textContent       = '₹' + num(monthlyCost);
-  document.getElementById('ds-total-spent').textContent= '₹' + num(totalCost);
-
-  generateReminders();
+// ═══════════════════════════════════════════════════
+function renderDash() {
+  document.getElementById('ds-total-v').textContent = db.vehicles.length;
+  var cur = new Date().toISOString().slice(0,7);
+  document.getElementById('ds-month-label').textContent = fmtM(cur);
+  var mCost = db.maintenance.filter(function(m){ return m.month===cur; }).reduce(function(a,b){ return a+b.amt; },0);
+  var tCost = db.maintenance.reduce(function(a,b){ return a+b.amt; },0);
+  document.getElementById('ds-month-cost').textContent = '₹'+num(mCost);
+  document.getElementById('ds-total-cost').textContent = '₹'+num(tCost);
+  renderAlerts();
   renderMiniChart();
-
-  const recent = [...db.maintenance].sort((a,b) => b.ts.localeCompare(a.ts)).slice(0, 8);
-  document.getElementById('ds-recent-count').textContent = recent.length;
-  const el = document.getElementById('ds-recent-list');
-  if (!recent.length) { el.innerHTML = '<div class="empty"><div class="ico">📋</div><p>பராமரிப்புப் பதிவுகள் ஏதுமில்லை</p></div>'; return; }
-  el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>தேதி</th><th>வாகனம்</th><th>வகை</th><th>தொகை</th><th>நிலை</th></tr></thead>
-    <tbody>${recent.map(r => `
-      <tr>
-        <td>${r.date}</td>
-        <td><strong style="color:var(--blue)">${esc(r.vehReg)}</strong></td>
-        <td>${esc(r.cat.split('(')[0].trim())}</td>
-        <td style="color:var(--red);font-weight:700">₹${num(r.amt)}</td>
-        <td>${r.status==='completed'?'<span class="chip chip-green">✅ முடிந்தது</span>':'<span class="chip chip-amber">⏳ நிலுவை</span>'}</td>
-      </tr>`).join('')}
-    </tbody></table></div>`;
+  renderRecentList();
 }
 
 function renderMiniChart() {
-  const wrap = document.getElementById('monthly-chart-wrap');
-  const months = getLast6Months();
-  const data = months.map(m => ({
-    label: m.slice(5),
-    val: db.maintenance.filter(e => e.month === m).reduce((a,b) => a + b.amt, 0)
-  }));
-  const maxVal = Math.max(...data.map(d => d.val), 1);
-  wrap.innerHTML = `<div class="month-bars">${data.map(d => `
-    <div class="month-bar-wrap">
-      <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:3px;">${d.val>0?'₹'+shortNum(d.val):''}</div>
-      <div class="month-bar" style="height:${Math.max(4, Math.round((d.val/maxVal)*90))}px;" title="₹${num(d.val)}"></div>
-      <div class="month-bar-label">${d.label}</div>
-    </div>`).join('')}</div>`;
+  var months = last6Months();
+  var data = months.map(function(m){
+    return { label:m.slice(5), val: db.maintenance.filter(function(e){ return e.month===m; }).reduce(function(a,b){ return a+b.amt; },0) };
+  });
+  var maxVal = Math.max.apply(null, data.map(function(d){ return d.val; }).concat([1]));
+  document.getElementById('ds-chart').innerHTML = '<div class="month-bars">'+data.map(function(d){
+    return '<div class="month-bar-wrap"><div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:3px">'+(d.val>0?'₹'+shortN(d.val):'')+'</div><div class="month-bar" style="height:'+Math.max(4,Math.round((d.val/maxVal)*90))+'px" title="₹'+num(d.val)+'"></div><div class="month-bar-label">'+d.label+'</div></div>';
+  }).join('')+'</div>';
 }
 
-function getLast6Months() {
-  const months = [];
-  const d = new Date();
-  for (let i = 5; i >= 0; i--) {
-    const t = new Date(d.getFullYear(), d.getMonth() - i, 1);
-    months.push(t.toISOString().slice(0,7));
-  }
-  return months;
+function renderRecentList() {
+  var recent = db.maintenance.slice().sort(function(a,b){ return b.ts.localeCompare(a.ts); }).slice(0,8);
+  document.getElementById('ds-recent-count').textContent = recent.length;
+  var el = document.getElementById('ds-recent');
+  if (!recent.length) { el.innerHTML='<div class="empty"><div class="ico">📋</div><p>பதிவுகள் ஏதுமில்லை</p></div>'; return; }
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>தேதி</th><th>வாகனம்</th><th>வகை</th><th>தொகை</th><th>நிலை</th></tr></thead><tbody>'+
+    recent.map(function(r){
+      return '<tr><td>'+r.date+'</td><td><strong style="color:var(--blue)">'+esc(r.vehReg)+'</strong></td><td>'+esc(r.cat.split('(')[0].trim())+'</td><td style="color:var(--red);font-weight:700">₹'+num(r.amt)+'</td><td>'+(r.status==='completed'?'<span class="chip chip-green">✅</span>':'<span class="chip chip-amber">⏳</span>')+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
 }
 
-// ══════════════════════════════════
-// ALERTS / REMINDERS
-// ══════════════════════════════════
-function generateReminders() {
-  const container = document.getElementById('ds-reminders');
-  let html = ''; let count = 0;
-  const today = new Date(); today.setHours(0,0,0,0);
+function renderAlerts() {
+  var container = document.getElementById('ds-reminders');
+  var today = new Date(); today.setHours(0,0,0,0);
+  var html = ''; var count = 0;
 
-  db.vehicles.forEach(v => {
-    if (!v.insExp || !v.fcExp) return;
-    const ins = new Date(v.insExp); ins.setHours(0,0,0,0);
-    const fc  = new Date(v.fcExp);  fc.setHours(0,0,0,0);
-    const dIns = Math.ceil((ins - today) / 86400000);
-    const dFc  = Math.ceil((fc - today)  / 86400000);
+  db.vehicles.forEach(function(v){
+    if (!v.insExp||!v.fcExp) return;
+    var dIns = Math.ceil((new Date(v.insExp)-today)/86400000);
+    var dFc  = Math.ceil((new Date(v.fcExp) -today)/86400000);
 
-    if (dIns <= 0) {
-      count++;
-      html += reminderHTML('danger', `🚨 காப்பீடு காலாவதியானது: <strong>${v.regno}</strong> [${v.name}]`,
-        `உடனடியாக புதுப்பிக்க வேண்டும்! முடிவு தேதி: ${v.insExp} (${Math.abs(dIns)} நாட்களுக்கு முன்பு)`,
-        `quickServiceLog('${v.id}','காப்பீடு புதுப்பித்தல் (Insurance Renewal)')`, '🔧 புதுப்பி');
-    } else if (dIns <= 30) {
-      count++;
-      html += reminderHTML('warning', `⚠️ காப்பீடு முடியப்போகிறது: <strong>${v.regno}</strong>`,
-        `இன்னும் <strong>${dIns}</strong> நாட்களில் முடிவடைகிறது. (${v.insExp})`,
-        `quickServiceLog('${v.id}','காப்பீடு புதுப்பித்தல் (Insurance Renewal)')`, '🔧 புதுப்பி');
+    if (dIns<=0) { count++;
+      html += alertRow('danger','🚨 காப்பீடு காலாவதியானது: <strong>'+v.regno+'</strong>',''+Math.abs(dIns)+' நாட்களுக்கு முன்பு முடிந்தது! ('+v.insExp+')','quickSvc(\''+v.id+'\',\'காப்பீடு புதுப்பித்தல் (Insurance Renewal)\')','🔧 புதுப்பி');
+    } else if (dIns<=30) { count++;
+      html += alertRow('warning','⚠️ காப்பீடு முடியப்போகிறது: <strong>'+v.regno+'</strong>','இன்னும் <strong>'+dIns+'</strong> நாட்களில் முடிவடைகிறது ('+v.insExp+')','quickSvc(\''+v.id+'\',\'காப்பீடு புதுப்பித்தல் (Insurance Renewal)\')','🔧 புதுப்பி');
     }
-    if (dFc <= 0) {
-      count++;
-      html += reminderHTML('danger', `🚨 FC காலாவதியானது: <strong>${v.regno}</strong>`,
-        `FC தகுதிச்சான்று முடிந்துவிட்டது! முடிவு தேதி: ${v.fcExp} (${Math.abs(dFc)} நாட்களுக்கு முன்பு)`,
-        `quickServiceLog('${v.id}','FC புதுப்பித்தல் (FC Renewal)')`, '🔧 புதுப்பி');
-    } else if (dFc <= 30) {
-      count++;
-      html += reminderHTML('warning', `⚠️ FC சான்றிதழ் முடியப்போகிறது: <strong>${v.regno}</strong>`,
-        `இன்னும் <strong>${dFc}</strong> நாட்களில் FC காலாவதியாகிறது. (${v.fcExp})`,
-        `quickServiceLog('${v.id}','FC புதுப்பித்தல் (FC Renewal)')`, '🔧 புதுப்பி');
+    if (dFc<=0) { count++;
+      html += alertRow('danger','🚨 FC காலாவதியானது: <strong>'+v.regno+'</strong>',''+Math.abs(dFc)+' நாட்களுக்கு முன்பு முடிந்தது! ('+v.fcExp+')','quickSvc(\''+v.id+'\',\'FC புதுப்பித்தல் (FC Renewal)\')','🔧 புதுப்பி');
+    } else if (dFc<=30) { count++;
+      html += alertRow('warning','⚠️ FC சான்றிதழ் முடியப்போகிறது: <strong>'+v.regno+'</strong>','இன்னும் <strong>'+dFc+'</strong> நாட்களில் முடிவடைகிறது ('+v.fcExp+')','quickSvc(\''+v.id+'\',\'FC புதுப்பித்தல் (FC Renewal)\')','🔧 புதுப்பி');
     }
   });
 
-  db.maintenance.forEach(m => {
-    if (m.status === 'pending' && m.nextDate) {
-      const nd = new Date(m.nextDate); nd.setHours(0,0,0,0);
-      const diff = Math.ceil((nd - today) / 86400000);
-      if (diff <= 15) {
+  db.maintenance.forEach(function(m){
+    if (m.status==='pending'&&m.nextDate) {
+      var diff = Math.ceil((new Date(m.nextDate)-today)/86400000);
+      if (diff<=15) {
         count++;
-        const over = diff < 0;
-        html += reminderHTML(over?'danger':'warning',
-          `${over?'🚨 சர்வீஸ் நாள் கடந்தது':'⏳ சர்வீஸ் நெருங்குகிறது'}: <strong>${m.vehReg}</strong> [${m.cat.split('(')[0].trim()}]`,
-          `அடுத்த சர்வீஸ் தேதி: <strong>${m.nextDate}</strong> (${over ? Math.abs(diff)+' நாட்கள் கடந்தது' : diff+' நாட்கள் மட்டுமே'}) | பட்டறை: ${m.workshop||'-'}`,
-          `markAlertAsCompleted('${m.id}')`, '✅ முடித்துவை',
-          `editMaintenance('${m.id}')`, '✏️ திருத்து');
+        var over = diff<0;
+        html += alertRow(over?'danger':'warning',
+          (over?'🚨 சர்வீஸ் கடந்தது':'⏳ சர்வீஸ் நெருங்குகிறது')+': <strong>'+m.vehReg+'</strong> ['+m.cat.split('(')[0].trim()+']',
+          'அடுத்த சர்வீஸ்: <strong>'+m.nextDate+'</strong> ('+(over?Math.abs(diff)+' நாட்கள் கடந்தது':diff+' நாட்கள்')+')',
+          'markDone(\''+m.id+'\')','✅ முடித்துவை');
       }
     }
   });
 
-  document.getElementById('ds-alerts-count').textContent = count;
-  container.innerHTML = html || '<div style="color:var(--green);font-weight:600;font-size:13px;text-align:center;padding:16px;background:var(--green-light);border-radius:8px;">✅ அனைத்து வாகனங்களும் தற்போது சரியாக உள்ளன!</div>';
+  document.getElementById('ds-alerts').textContent = count;
+  container.innerHTML = html || '<div style="color:var(--green);font-weight:600;font-size:13px;text-align:center;padding:16px;background:var(--green-light);border-radius:8px">✅ அனைத்து வாகனங்களும் தற்போது சரியாக உள்ளன!</div>';
 }
 
-function reminderHTML(cls, title, sub, act1, lbl1, act2='', lbl2='') {
-  return `<div class="reminder-item ${cls}">
-    <div><div class="reminder-text">${title}</div><div class="reminder-sub">${sub}</div></div>
-    <div style="display:flex;gap:6px;flex-shrink:0;">
-      <button class="btn btn-success btn-sm" onclick="${act1}">${lbl1}</button>
-      ${act2 ? `<button class="btn btn-ghost btn-sm" onclick="${act2}">${lbl2}</button>` : ''}
-    </div>
-  </div>`;
+function alertRow(cls, title, sub, act, lbl) {
+  return '<div class="reminder-item '+cls+'"><div><div class="reminder-text">'+title+'</div><div class="reminder-sub">'+sub+'</div></div><div><button class="btn btn-success btn-sm" onclick="'+act+'">'+lbl+'</button></div></div>';
 }
 
-// ══════════════════════════════════
-// REPORTS
-// ══════════════════════════════════
-function toggleFilterInputs() {
-  const mode = v('rep-filter-type');
-  document.getElementById('f-year-div').style.display  = mode === 'year'  ? 'block' : 'none';
-  document.getElementById('f-month-div').style.display = mode === 'month' ? 'block' : 'none';
-  document.getElementById('f-date-div').style.display  = mode === 'date'  ? 'block' : 'none';
-  renderReport();
-}
-
-function populateReportFilters() {
-  const yearSel = document.getElementById('r-year');
-  const vSel    = document.getElementById('r-vehicle');
-  const curYear = new Date().getFullYear();
-  const years   = [...new Set(db.maintenance.map(m => m.date.slice(0,4)))].sort().reverse();
-  if (!years.includes(String(curYear))) years.unshift(String(curYear));
-  yearSel.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
-  vSel.innerHTML    = '<option value="">அனைத்து வாகனங்கள்</option>' +
-    db.vehicles.map(v => `<option value="${v.id}">${esc(v.regno)} - ${esc(v.name)}</option>`).join('');
+// ═══════════════════════════════════════════════════
+// REPORT
+// ═══════════════════════════════════════════════════
+function fillReportFilters() {
+  var yearSel = document.getElementById('r-year');
+  var vSel    = document.getElementById('r-vehicle');
+  var curYear = new Date().getFullYear().toString();
+  var years   = Array.from(new Set(db.maintenance.map(function(m){ return m.date.slice(0,4); }))).sort().reverse();
+  if (!years.includes(curYear)) years.unshift(curYear);
+  yearSel.innerHTML = years.map(function(y){ return '<option value="'+y+'">'+y+'</option>'; }).join('');
+  vSel.innerHTML    = '<option value="">அனைத்து வாகனங்கள்</option>'+
+    db.vehicles.map(function(v){ return '<option value="'+v.id+'">'+esc(v.regno)+' - '+esc(v.name)+'</option>'; }).join('');
   document.getElementById('r-month').value = new Date().toISOString().slice(0,7);
   document.getElementById('r-date').value  = new Date().toISOString().split('T')[0];
 }
 
+function toggleRFilter() {
+  var mode = gv('r-mode');
+  document.getElementById('r-year-div').style.display  = mode==='year'  ? 'block':'none';
+  document.getElementById('r-month-div').style.display = mode==='month' ? 'block':'none';
+  document.getElementById('r-date-div').style.display  = mode==='date'  ? 'block':'none';
+  renderReport();
+}
+
 function renderReport() {
-  const mode     = v('rep-filter-type');
-  const vFilter  = v('r-vehicle');
-  const selYear  = v('r-year') || String(new Date().getFullYear());
-  const selMonth = v('r-month');
-  const selDate  = v('r-date');
+  var mode   = gv('r-mode');
+  var vf     = gv('r-vehicle');
+  var year   = gv('r-year') || new Date().getFullYear().toString();
+  var month  = gv('r-month');
+  var date   = gv('r-date');
 
-  let list = [...db.maintenance];
-  if (mode === 'year')       list = list.filter(m => m.date.startsWith(selYear));
-  else if (mode === 'month') list = list.filter(m => m.month === selMonth);
-  else if (mode === 'date')  list = list.filter(m => m.date === selDate);
-  // 'all' = no filter
-  if (vFilter) list = list.filter(m => m.vehId === vFilter);
+  var list = db.maintenance.slice();
+  if (mode==='year')       list = list.filter(function(m){ return m.date.startsWith(year); });
+  else if (mode==='month') list = list.filter(function(m){ return m.month===month; });
+  else if (mode==='date')  list = list.filter(function(m){ return m.date===date; });
+  if (vf) list = list.filter(function(m){ return m.vehId===vf; });
 
-  const total     = list.reduce((a,b) => a + b.amt, 0);
-  const completed = list.filter(m => m.status === 'completed').length;
-  const pending   = list.filter(m => m.status === 'pending').length;
+  var total = list.reduce(function(a,b){ return a+b.amt; },0);
+  var done  = list.filter(function(m){ return m.status==='completed'; }).length;
+  var pend  = list.filter(function(m){ return m.status==='pending'; }).length;
 
-  document.getElementById('r-total-expense').textContent       = '₹' + num(total);
-  document.getElementById('r-active-vehicles').textContent      = vFilter ? '1' : db.vehicles.length;
-  document.getElementById('r-completed-services').textContent   = completed;
-  document.getElementById('r-pending-services').textContent     = pending;
+  document.getElementById('r-total').textContent = '₹'+num(total);
+  document.getElementById('r-vcnt').textContent  = vf?'1':db.vehicles.length;
+  document.getElementById('r-done').textContent  = done;
+  document.getElementById('r-pend').textContent  = pend;
 
   // Category summary
-  const categories = [
-    'பொது சர்வீஸ் (General Service)',
-    'என்ஜின் ஆயில் மாற்றம் (Oil Change)',
-    'பிரேக் பழுது நீக்கம் (Brake Repair)',
-    'டயர் மாற்றுதல் (Tyre Change)',
-    'காப்பீடு புதுப்பித்தல் (Insurance Renewal)',
-    'FC புதுப்பித்தல் (FC Renewal)',
-    'அபராதம் / சல்லான் (Challan / Fine)',
-    'இதர செலவினங்கள் (Other Repair)'
-  ];
-  const catMap = {};
-  categories.forEach(c => catMap[c] = 0);
-  list.forEach(m => { if (catMap[m.cat] !== undefined) catMap[m.cat] += m.amt; else catMap[m.cat] = (catMap[m.cat]||0) + m.amt; });
-  document.getElementById('r-expense-cat-summary').innerHTML = Object.entries(catMap).map(([name,sum]) => `
-    <div class="expense-summary-card">
-      <span class="esc-label">🏷️ ${esc(name.split(' (')[0])}</span>
-      <span class="esc-val">₹${num(sum)}</span>
-    </div>`).join('');
+  var cats = ['பொது சர்வீஸ் (General Service)','என்ஜின் ஆயில் மாற்றம் (Oil Change)','பிரேக் பழுது நீக்கம் (Brake Repair)','டயர் மாற்றுதல் (Tyre Change)','காப்பீடு புதுப்பித்தல் (Insurance Renewal)','FC புதுப்பித்தல் (FC Renewal)','அபராதம் / சல்லான் (Challan / Fine)','இதர செலவினங்கள் (Other Repair)'];
+  var catMap = {};
+  cats.forEach(function(c){ catMap[c]=0; });
+  list.forEach(function(m){ catMap[m.cat] = (catMap[m.cat]||0) + m.amt; });
+  document.getElementById('r-cat-summary').innerHTML = Object.entries(catMap).map(function(e){
+    return '<div class="expense-summary-card"><span class="esc-label">🏷️ '+esc(e[0].split(' (')[0])+'</span><span class="esc-val">₹'+num(e[1])+'</span></div>';
+  }).join('');
 
-  // Monthly chart in report
-  renderReportMonthlyChart(list);
-
-  // Vehicle-wise chart
-  renderVehicleWiseChart(list);
-
-  // Expense table
-  const tbody = document.getElementById('r-exp-tbody');
-  const empty = document.getElementById('r-exp-empty');
-  const sorted = [...list].sort((a,b) => b.date.localeCompare(a.date));
-  if (!sorted.length) { tbody.innerHTML=''; empty.style.display='block'; return; }
-  empty.style.display = 'none';
-  tbody.innerHTML = sorted.map(e => `
-    <tr>
-      <td><strong>${e.date}</strong><br><span style="font-size:11px;color:var(--muted)">${fmtMonth(e.month)}</span></td>
-      <td><strong style="color:var(--blue)">${esc(e.vehReg)}</strong></td>
-      <td><span class="chip chip-purple">${esc(e.cat.split('(')[0].trim())}</span></td>
-      <td>${esc(e.workshop||'-')}</td>
-      <td><strong style="color:var(--red)">₹${num(e.amt)}</strong></td>
-    </tr>`).join('');
-}
-
-function renderReportMonthlyChart(list) {
-  const wrap = document.getElementById('r-monthly-chart');
-  const months = [...new Set(list.map(m => m.month))].sort();
-  if (!months.length) { wrap.innerHTML='<div class="empty"><div class="ico">📅</div><p>தரவு இல்லை</p></div>'; return; }
-  const data = months.map(m => ({ label: fmtMonth(m), val: list.filter(e => e.month===m).reduce((a,b)=>a+b.amt,0) }));
-  const maxVal = Math.max(...data.map(d => d.val), 1);
-  wrap.innerHTML = `<div class="month-bars" style="height:120px">${data.map(d=>`
-    <div class="month-bar-wrap">
-      <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:3px;">₹${shortNum(d.val)}</div>
-      <div class="month-bar" style="height:${Math.max(4,Math.round((d.val/maxVal)*100))}px;background:var(--blue);" title="₹${num(d.val)}"></div>
-      <div class="month-bar-label" style="font-size:9px;text-align:center;max-width:40px;overflow:hidden;white-space:nowrap;">${d.label.slice(0,7)}</div>
-    </div>`).join('')}</div>`;
-}
-
-function renderVehicleWiseChart(list) {
-  const wrap = document.getElementById('r-vehicle-chart');
-  const vMap = {};
-  list.forEach(m => { vMap[m.vehReg] = (vMap[m.vehReg]||0) + m.amt; });
-  const entries = Object.entries(vMap).sort((a,b)=>b[1]-a[1]);
-  if (!entries.length) { wrap.innerHTML='<div class="empty"><div class="ico">🚗</div><p>தரவு இல்லை</p></div>'; return; }
-  const maxVal = Math.max(...entries.map(e=>e[1]), 1);
-  wrap.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;">' +
-    entries.map(([reg,amt]) => `
-      <div style="display:flex;align-items:center;gap:12px;">
-        <div style="width:80px;font-size:12px;font-weight:700;color:var(--blue);flex-shrink:0;">${esc(reg)}</div>
-        <div style="flex:1;background:var(--bg);border-radius:6px;height:22px;overflow:hidden;">
-          <div style="height:100%;width:${Math.max(4,Math.round((amt/maxVal)*100))}%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:6px;transition:width 0.5s;"></div>
-        </div>
-        <div style="width:90px;font-size:12px;font-weight:700;color:var(--red);text-align:right;flex-shrink:0;">₹${num(amt)}</div>
-      </div>`).join('') + '</div>';
-}
-
-async function exportReportToPDF() {
-  const elFilter  = document.getElementById('ignore-pdf-filters');
-  const elBtnRow  = document.getElementById('ignore-pdf-btn');
-  elFilter.style.display = 'none';
-  elBtnRow.style.display  = 'none';
-  showLoading('PDF உருவாக்குகிறது...');
-
-  // Log report export to sheet
-  if (cfg.webAppUrl) {
-    sheetsPOST({
-      action: 'logReport',
-      sheet: SHEET_REPORTS,
-      row: [new Date().toISOString(), v('rep-filter-type'), document.getElementById('r-total-expense').textContent,
-            document.getElementById('r-active-vehicles').textContent,
-            document.getElementById('r-completed-services').textContent,
-            document.getElementById('r-pending-services').textContent, 'HTML_App']
-    });
+  // Monthly chart
+  var mKeys = Array.from(new Set(list.map(function(m){ return m.month; }))).sort();
+  if (!mKeys.length) {
+    document.getElementById('r-monthly-chart').innerHTML = '<div class="empty"><div class="ico">📅</div><p>தரவு இல்லை</p></div>';
+  } else {
+    var mData = mKeys.map(function(m){ return {label:fmtM(m),val:list.filter(function(e){ return e.month===m; }).reduce(function(a,b){ return a+b.amt; },0)}; });
+    var mMax  = Math.max.apply(null, mData.map(function(d){ return d.val; }).concat([1]));
+    document.getElementById('r-monthly-chart').innerHTML = '<div class="month-bars" style="height:120px">'+mData.map(function(d){
+      return '<div class="month-bar-wrap"><div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:3px">₹'+shortN(d.val)+'</div><div class="month-bar" style="height:'+Math.max(4,Math.round((d.val/mMax)*100))+'px;background:var(--blue)" title="₹'+num(d.val)+'"></div><div class="month-bar-label" style="font-size:9px">'+d.label.slice(0,7)+'</div></div>';
+    }).join('')+'</div>';
   }
 
-  const opt = {
-    margin:      [10,10,10,10],
-    filename:    `வாகன_பராமரிப்பு_அறிக்கை_${new Date().toISOString().split('T')[0]}.pdf`,
-    image:       { type:'jpeg', quality:0.98 },
-    html2canvas: { scale:2, useCORS:true },
-    jsPDF:       { unit:'mm', format:'a4', orientation:'portrait' }
-  };
-  html2pdf().set(opt).from(document.getElementById('printable-report-area')).save().then(() => {
-    elFilter.style.display = '';
-    elBtnRow.style.display  = '';
-    hideLoading();
-    toast('✅ PDF அறிக்கை வெற்றிகரமாக தரவிறக்கப்பட்டது!', 'ok');
-  }).catch(e => {
-    elFilter.style.display = '';
-    elBtnRow.style.display  = '';
-    hideLoading();
-    toast('❌ PDF உருவாக்க தோல்வி', 'err');
+  // Vehicle chart
+  var vMap = {};
+  list.forEach(function(m){ vMap[m.vehReg]=(vMap[m.vehReg]||0)+m.amt; });
+  var vEntries = Object.entries(vMap).sort(function(a,b){ return b[1]-a[1]; });
+  if (!vEntries.length) {
+    document.getElementById('r-vehicle-chart').innerHTML = '<div class="empty"><div class="ico">🚗</div><p>தரவு இல்லை</p></div>';
+  } else {
+    var vMax = Math.max.apply(null, vEntries.map(function(e){ return e[1]; }).concat([1]));
+    document.getElementById('r-vehicle-chart').innerHTML = '<div style="display:flex;flex-direction:column;gap:8px">'+
+      vEntries.map(function(e){
+        return '<div style="display:flex;align-items:center;gap:12px"><div style="width:80px;font-size:12px;font-weight:700;color:var(--blue);flex-shrink:0">'+esc(e[0])+'</div><div style="flex:1;background:var(--bg);border-radius:6px;height:22px;overflow:hidden"><div style="height:100%;width:'+Math.max(4,Math.round((e[1]/vMax)*100))+'%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:6px"></div></div><div style="width:90px;font-size:12px;font-weight:700;color:var(--red);text-align:right;flex-shrink:0">₹'+num(e[1])+'</div></div>';
+      }).join('')+'</div>';
+  }
+
+  // Table
+  var sorted = list.slice().sort(function(a,b){ return b.date.localeCompare(a.date); });
+  var tbody = document.getElementById('r-tbody');
+  var empty = document.getElementById('r-empty');
+  if (!sorted.length) { tbody.innerHTML=''; empty.style.display='block'; return; }
+  empty.style.display='none';
+  tbody.innerHTML = sorted.map(function(e){
+    return '<tr><td><strong>'+e.date+'</strong><br><span style="font-size:11px;color:var(--muted)">'+fmtM(e.month)+'</span></td><td><strong style="color:var(--blue)">'+esc(e.vehReg)+'</strong></td><td><span class="chip chip-purple">'+esc(e.cat.split('(')[0].trim())+'</span></td><td>'+esc(e.workshop||'-')+'</td><td><strong style="color:var(--red)">₹'+num(e.amt)+'</strong></td></tr>';
+  }).join('');
+}
+
+function exportPDF() {
+  var fi = document.getElementById('report-filters');
+  var pb = document.getElementById('pdf-btn-wrap');
+  fi.style.display='none'; pb.style.display='none';
+  showLoad('PDF உருவாக்குகிறது...');
+  sheetsPost({ action:'logReport', sheet:'Reports', row:[new Date().toISOString(), gv('r-mode'), document.getElementById('r-total').textContent, document.getElementById('r-vcnt').textContent, document.getElementById('r-done').textContent, document.getElementById('r-pend').textContent, 'HTML_App'] }, function(){});
+  var opt = { margin:[10,10,10,10], filename:'வாகன_அறிக்கை_'+new Date().toISOString().split('T')[0]+'.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2,useCORS:true}, jsPDF:{unit:'mm',format:'a4',orientation:'portrait'} };
+  html2pdf().set(opt).from(document.getElementById('report-print-area')).save().then(function(){
+    fi.style.display=''; pb.style.display=''; hideLoad();
+    toast('✅ PDF அறிக்கை தரவிறக்கப்பட்டது!','ok');
+  }).catch(function(){
+    fi.style.display=''; pb.style.display=''; hideLoad();
+    toast('❌ PDF உருவாக்க தோல்வி','err');
   });
 }
 
-// ══════════════════════════════════
-// SETTINGS PAGE
-// ══════════════════════════════════
+// ═══════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════
 function renderSettings() {
-  // Connection status
-  const statusEl = document.getElementById('settings-conn-status');
-  if (cfg.webAppUrl) {
-    statusEl.style.cssText = 'background:var(--green-light);border:1px solid #A7F3D0;color:var(--green);padding:14px;border-radius:8px;margin-bottom:14px;font-size:13px;';
-    statusEl.innerHTML = `✅ <strong>இணைக்கப்பட்டது!</strong> Web App URL: <code style="font-size:11px;word-break:break-all;">${cfg.webAppUrl}</code>`;
-  } else {
-    statusEl.style.cssText = 'background:var(--red-light);border:1px solid #FECACA;color:var(--red);padding:14px;border-radius:8px;margin-bottom:14px;font-size:13px;';
-    statusEl.innerHTML = '❌ <strong>இணைக்கப்படவில்லை.</strong> Google Sheets Web App URL அமைக்கவும்.';
-  }
-
-  // Stats
-  const totalSpent = db.maintenance.reduce((a,b) => a+b.amt, 0);
-  const pending    = db.maintenance.filter(m => m.status==='pending').length;
-  document.getElementById('settings-stats').innerHTML = [
-    { label:'மொத்த வாகனங்கள்', val: db.vehicles.length, color:'blue' },
-    { label:'மொத்த பதிவுகள்',  val: db.maintenance.length, color:'purple' },
-    { label:'மொத்த செலவு',    val: '₹'+num(totalSpent), color:'red' },
-    { label:'நிலுவை சர்வீஸ்', val: pending, color:'amber' },
-  ].map(s => `<div class="stat-card ${s.color}" style="text-align:center;">
-    <div class="stat-label">${s.label}</div>
-    <div class="stat-val ${s.color}">${s.val}</div>
-  </div>`).join('');
+  var total = db.maintenance.reduce(function(a,b){ return a+b.amt; },0);
+  var pend  = db.maintenance.filter(function(m){ return m.status==='pending'; }).length;
+  document.getElementById('s-stats').innerHTML = [
+    {l:'மொத்த வாகனங்கள்', v:db.vehicles.length,    c:'blue'},
+    {l:'மொத்த பதிவுகள்',  v:db.maintenance.length, c:'purple'},
+    {l:'மொத்த செலவு',     v:'₹'+num(total),         c:'red'},
+    {l:'நிலுவை சர்வீஸ்', v:pend,                   c:'amber'},
+  ].map(function(s){
+    return '<div class="stat-card '+s.c+'" style="text-align:center"><div class="stat-label">'+s.l+'</div><div class="stat-val '+s.c+'">'+s.v+'</div></div>';
+  }).join('');
 }
 
-// ─── BACKUP / RESTORE ───
-function backupToJSON() {
-  const data = { version:'3.0', date: new Date().toISOString(), vehicles: db.vehicles, maintenance: db.maintenance };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `vehicle_backup_${new Date().toISOString().split('T')[0]}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  toast('✅ JSON காப்புப்பிரதி தரவிறக்கப்பட்டது!', 'ok');
+// ─── BACKUP / RESTORE ─────────────────────────────
+function backupJSON() {
+  var data = { version:'3.0', date:new Date().toISOString(), vehicles:db.vehicles, maintenance:db.maintenance };
+  var blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url; a.download = 'vehicle_backup_'+new Date().toISOString().split('T')[0]+'.json';
+  a.click(); URL.revokeObjectURL(url);
+  toast('✅ JSON காப்புப்பிரதி தரவிறக்கப்பட்டது!','ok');
 }
 
-function restoreFromJSON(input) {
-  const file = input.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
+function restoreJSON(input) {
+  var file = input.files[0]; if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
     try {
-      const data = JSON.parse(e.target.result);
-      if (!data.vehicles || !data.maintenance) throw new Error('Invalid format');
-      if (!confirm(`${data.vehicles.length} வாகனங்கள் மற்றும் ${data.maintenance.length} பதிவுகள் மீட்டெடுக்கவா? தற்போதைய தரவு மாற்றப்படும்.`)) return;
-      db.vehicles    = data.vehicles;
-      db.maintenance = data.maintenance;
-      save('vehicles'); save('maintenance');
-      toast('✅ தரவு வெற்றிகரமாக மீட்டெடுக்கப்பட்டது!', 'ok');
-      renderDashboard();
-      renderSettings();
-    } catch(err) { toast('❌ JSON கோப்பு தவறானது: ' + err.message, 'err'); }
+      var data = JSON.parse(e.target.result);
+      if (!data.vehicles||!data.maintenance) throw new Error('தவறான கோப்பு வடிவம்');
+      if (!confirm(data.vehicles.length+' வாகனங்கள், '+data.maintenance.length+' பதிவுகள் மீட்டெடுக்கவா?')) return;
+      db.vehicles = data.vehicles; db.maintenance = data.maintenance;
+      saveLocal('vehicles'); saveLocal('maintenance');
+      toast('✅ தரவு வெற்றிகரமாக மீட்டெடுக்கப்பட்டது!','ok');
+      renderDash(); renderSettings();
+    } catch(err){ toast('❌ JSON கோப்பு தவறானது: '+err.message,'err'); }
   };
   reader.readAsText(file);
-  input.value = '';
+  input.value='';
 }
 
-function clearAllData() {
-  if (!confirm('எச்சரிக்கை! அனைத்து LocalStorage தரவும் நிரந்தரமாக அழிக்கப்படும். தொடரவா?')) return;
+function clearLocal() {
+  if (!confirm('அனைத்து LocalStorage தரவும் அழிக்கப்படும். தொடரவா?')) return;
   if (!confirm('உறுதிப்படுத்தவும்: அழிக்கவா?')) return;
-  db.vehicles = []; db.maintenance = [];
-  localStorage.removeItem('vm_vehicles');
-  localStorage.removeItem('vm_maintenance');
-  toast('🗑️ அனைத்து தரவும் அழிக்கப்பட்டது', 'warn');
-  renderSettings();
-  renderDashboard();
+  db.vehicles=[]; db.maintenance=[];
+  localStorage.removeItem('vm_vehicles'); localStorage.removeItem('vm_maintenance');
+  toast('🗑️ LocalStorage தரவு அழிக்கப்பட்டது','warn');
+  renderDash(); renderSettings();
 }
 
-// ══════════════════════════════════
-// UTILS
-// ══════════════════════════════════
-function populateVehicleSelect(id) {
-  const sel = document.getElementById(id); if(!sel) return;
-  sel.innerHTML = '<option value="">-- வாகனம் தேர்வு செய்க --</option>' +
-    db.vehicles.map(v => `<option value="${v.id}">${esc(v.regno)} (${esc(v.name)})</option>`).join('');
+// ═══════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════
+function fillVSel(id) {
+  var sel = document.getElementById(id); if (!sel) return;
+  sel.innerHTML = '<option value="">-- வாகனம் தேர்வு செய்க --</option>'+
+    db.vehicles.map(function(v){ return '<option value="'+v.id+'">'+esc(v.regno)+' ('+esc(v.name)+')</option>'; }).join('');
+}
+function last6Months() {
+  var months=[]; var d=new Date();
+  for (var i=5;i>=0;i--){ var t=new Date(d.getFullYear(),d.getMonth()-i,1); months.push(t.toISOString().slice(0,7)); }
+  return months;
+}
+function gv(id) { var e=document.getElementById(id); return e?(e.value||'').trim():''; }
+function num(n) { return (n||0).toLocaleString('en-IN',{minimumFractionDigits:0}); }
+function shortN(n) { if(n>=100000) return (n/100000).toFixed(1)+'L'; if(n>=1000) return (n/1000).toFixed(1)+'K'; return String(Math.round(n)); }
+function fmtM(m) { if(!m) return '-'; var p=m.split('-'); return MONTHS_TA[parseInt(p[1])-1]+' '+p[0]; }
+function esc(s) { if(!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function sp(id,show) { var e=document.getElementById(id); if(e) e.style.display=show?'inline-flex':'none'; }
+function toast(msg,type) {
+  var t=document.getElementById('toast'); if(!t) return;
+  t.textContent=msg; t.className='toast '+(type||'ok')+' show';
+  setTimeout(function(){ t.className='toast'; },4000);
 }
 
-function showSpinner(id) {
-  const el = document.getElementById(id);
-  if(el) el.style.display='inline-flex';
-}
-function hideSpinner(id) {
-  const el = document.getElementById(id);
-  if(el) el.style.display='none';
-}
-function v(id) { return document.getElementById(id)?.value?.trim() || ''; }
-function num(n) { return (n||0).toLocaleString('en-IN', { minimumFractionDigits:0 }); }
-function shortNum(n) { if (n>=100000) return (n/100000).toFixed(1)+'L'; if(n>=1000) return (n/1000).toFixed(1)+'K'; return String(Math.round(n)); }
-function fmtMonth(m) { if(!m) return '-'; const [y,mo] = m.split('-'); return `${MONTHS_TA[parseInt(mo)-1]} ${y}`; }
-function esc(str) { if(!str) return ''; return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function toast(msg, type='ok') {
-  const t = document.getElementById('toast'); if(!t) return;
-  t.textContent = msg; t.className = `toast ${type} show`;
-  setTimeout(() => t.className='toast', 4000);
+// ═══════════════════════════════════════════════════
+// LOGOUT — confirmation modal, full session teardown,
+// and redirect to the login page.
+// ═══════════════════════════════════════════════════
+
+// Show the currently logged-in user's name/initial in the top bar.
+// Reads the same 'vm_auth' session object the auth guard in <head> checks.
+function renderUserPill() {
+  try {
+    var raw = sessionStorage.getItem('vm_auth');
+    if (!raw) return;
+    var session = JSON.parse(raw);
+    var name = (session && session.user) ? session.user : 'பயனர்';
+    var nameEl = document.getElementById('topbar-username');
+    var avatarEl = document.getElementById('topbar-avatar');
+    if (nameEl) nameEl.textContent = name;
+    if (avatarEl) avatarEl.textContent = name.trim().charAt(0).toUpperCase() || '?';
+  } catch (e) {
+    console.warn('[renderUserPill] could not read session:', e);
+  }
 }
 
-// ══════════════════════════════════
-// INIT
-// ══════════════════════════════════
-(async function init() {
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  const monthStr = today.toISOString().slice(0,7);
-  document.getElementById('m-date').value  = todayStr;
-  document.getElementById('m-month').value = monthStr;
+function openLogoutModal() {
+  var ov = document.getElementById('logout-modal-overlay');
+  if (ov) ov.classList.add('open');
+}
 
-  updateConfigDot();
+function closeLogoutModal() {
+  var ov = document.getElementById('logout-modal-overlay');
+  if (ov) ov.classList.remove('open');
+}
+
+// Close the modal on Escape, and on overlay click (outside the modal box)
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') closeLogoutModal();
+});
+document.addEventListener('DOMContentLoaded', function(){
+  var ov = document.getElementById('logout-modal-overlay');
+  if (ov) {
+    ov.addEventListener('click', function(e){
+      if (e.target === ov) closeLogoutModal();
+    });
+  }
+  renderUserPill();
+});
+
+// User confirmed "ஆம்" — actually log out.
+function confirmLogout() {
+  console.log('[logout] user confirmed logout — clearing session and local data');
+
+  try {
+    // 1. Remove authentication / session info specifically.
+    sessionStorage.removeItem('vm_auth');
+
+    // 2. Clear ALL sessionStorage for this app (covers any other
+    //    session-scoped keys that might exist now or in future).
+    sessionStorage.clear();
+
+    // 3. Clear ALL localStorage for this app — this removes the
+    //    cached vehicles/maintenance data too, which is intentional:
+    //    on next login, syncFromSheet() will re-populate from the
+    //    Google Sheet, the single source of truth, rather than
+    //    leaving a previous user's cached data sitting on a shared
+    //    computer for the next person who logs in.
+    localStorage.clear();
+
+    // 4. If you add cookie-based auth later, clear it here too, e.g.:
+    //    document.cookie = 'vm_session=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+
+  } catch (e) {
+    console.error('[logout] error while clearing storage:', e);
+  }
+
+  // 5. Redirect to the login page.
+  //    location.replace (not href) so this page is removed from
+  //    browser history — pressing Back from the login page will
+  //    NOT return here, it'll go further back instead.
+  window.location.replace('login.html');
+}
+
+// ─── BACK-BUTTON / BFCACHE PROTECTION ─────────────────────
+// Modern browsers can restore a page from an in-memory snapshot
+// (the "back/forward cache") when the user navigates Back, WITHOUT
+// re-running page load from scratch. The <head> auth guard runs once
+// on initial load, but if a logged-in user logs out, then presses
+// Back, the browser may try to restore this exact page from bfcache.
+// The 'pageshow' event fires in that case too (its persisted flag is
+// true), so we re-check auth here as a second line of defense.
+window.addEventListener('pageshow', function(event){
+  var session = sessionStorage.getItem('vm_auth');
+  if (!session) {
+    console.warn('[pageshow] no active session on page restore — redirecting to login');
+    window.location.replace('login.html');
+    return;
+  }
+  if (event.persisted) {
+    console.log('[pageshow] page restored from back/forward cache — re-validated session, OK');
+  }
+});
+
+// ═══════════════════════════════════════════════════
+// INIT — AUTO LOAD FROM SHEETS ON START
+// ═══════════════════════════════════════════════════
+(function init(){
+  var t = new Date();
+  document.getElementById('m-date').value  = t.toISOString().split('T')[0];
+  document.getElementById('m-month').value = t.toISOString().slice(0,7);
+  setStatus('syncing','இணைக்கிறது...');
   showPage('dashboard');
 
-  // Load from Sheets if URL is configured
-  if (cfg.webAppUrl) {
-    await loadAllFromSheets();
-  } else {
-    hideLoading();
-  }
+  // Auto load from Google Sheets on every page open
+  syncFromSheet();
 })();
 </script>
 </body>

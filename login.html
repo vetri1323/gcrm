@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>உள்நுழைவு — வாகன மேலாண்மை</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+:root{--ink:#111827;--ink2:#374151;--muted:#6B7280;--border:#E5E7EB;--border2:#D1D5DB;--bg:#F9FAFB;--white:#FFFFFF;--blue:#2563EB;--blue-light:#EFF6FF;--blue-mid:#DBEAFE;--green:#059669;--red:#DC2626;--red-light:#FEF2F2;--orange:#ff6b00;--radius:10px;--radius-sm:6px;--shadow:0 1px 3px rgba(0,0,0,0.08),0 1px 2px rgba(0,0,0,0.06);--shadow-md:0 10px 30px rgba(17,24,39,0.12)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Plus Jakarta Sans','Noto Sans Tamil',sans-serif;
+  background:linear-gradient(160deg,var(--ink) 0%,#1F2937 45%,var(--ink) 100%);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  padding:24px;color:var(--ink);
+}
+.login-card{
+  background:var(--white);border-radius:18px;box-shadow:var(--shadow-md);
+  width:380px;max-width:100%;padding:34px 30px 30px;
+}
+.login-logo{text-align:center;margin-bottom:22px}
+.login-logo .ico{
+  width:54px;height:54px;border-radius:16px;margin:0 auto 12px;
+  background:var(--blue-light);color:var(--blue);
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+}
+.login-logo h1{font-size:17px;font-weight:800;color:var(--ink)}
+.login-logo p{font-size:12px;color:var(--muted);margin-top:4px}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+.field label{font-size:12px;font-weight:600;color:var(--ink2)}
+.field input{
+  border:1.5px solid var(--border2);border-radius:var(--radius-sm);
+  padding:10px 12px;font-size:13.5px;font-family:inherit;width:100%;
+  transition:border 0.15s,box-shadow 0.15s;
+}
+.field input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,0.1)}
+.login-err{
+  display:none;background:var(--red-light);color:var(--red);font-size:12.5px;
+  font-weight:600;padding:9px 12px;border-radius:var(--radius-sm);margin-bottom:14px;
+}
+.login-err.show{display:block}
+.btn-login{
+  width:100%;padding:11px;border:none;border-radius:var(--radius-sm);
+  background:var(--blue);color:#fff;font-size:14px;font-weight:700;
+  font-family:inherit;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;gap:8px;margin-top:6px;transition:background 0.15s;
+}
+.btn-login:hover{background:#1D4ED8}
+.btn-login:active{transform:scale(0.98)}
+.login-foot{text-align:center;font-size:11.5px;color:var(--muted);margin-top:18px}
+</style>
+</head>
+<body>
+
+<div class="login-card">
+  <div class="login-logo">
+    <div class="ico"><i class="fa-solid fa-truck-fast" aria-hidden="true"></i></div>
+    <h1>வாகன பராமரிப்பு மேலாண்மை</h1>
+    <p>தொடர உள்நுழையவும்</p>
+  </div>
+
+  <div class="login-err" id="login-err"></div>
+
+  <form id="login-form" onsubmit="return handleLogin(event)">
+    <div class="field">
+      <label for="lg-user">பயனர் பெயர்</label>
+      <input type="text" id="lg-user" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="lg-pass">கடவுச்சொல்</label>
+      <input type="password" id="lg-pass" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn-login">
+      <i class="fa-solid fa-right-to-bracket" aria-hidden="true"></i>
+      உள்நுழைய
+    </button>
+  </form>
+
+  <p class="login-foot">Vehicle Fleet System v3.0</p>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════
+// DEMO-ONLY LOGIN HANDLER
+//
+// This checks credentials entirely on the client side, which is
+// NOT secure — anyone can read this JavaScript and see exactly
+// what username/password it expects, or bypass it entirely by
+// calling sessionStorage.setItem(...) themselves in devtools.
+//
+// This file exists so the Logout feature has a real page to
+// redirect to and so "session validation" has something concrete
+// to check against. For a production deployment you should
+// replace this with real server-side authentication — for
+// example, posting credentials to your Google Apps Script
+// backend, having it verify against a Users sheet (with hashed
+// passwords, never plain text), and returning a signed token
+// that this page stores instead of trusting a local check.
+// ═══════════════════════════════════════════════════════════
+
+var DEMO_USERNAME = 'admin';
+var DEMO_PASSWORD = 'admin123';
+
+function handleLogin(e) {
+  e.preventDefault();
+  var user = document.getElementById('lg-user').value.trim();
+  var pass = document.getElementById('lg-pass').value;
+  var errBox = document.getElementById('login-err');
+
+  if (user === DEMO_USERNAME && pass === DEMO_PASSWORD) {
+    var session = {
+      loggedIn: true,
+      user: user,
+      loginTime: Date.now()
+    };
+    sessionStorage.setItem('vm_auth', JSON.stringify(session));
+    console.log('[login] success, redirecting to index.html');
+    window.location.replace('index.html');
+  } else {
+    errBox.textContent = 'பயனர் பெயர் அல்லது கடவுச்சொல் தவறானது.';
+    errBox.classList.add('show');
+    console.warn('[login] failed attempt for username:', user);
+  }
+  return false;
+}
+
+// If a valid session already exists, skip the login form entirely.
+(function redirectIfAlreadyLoggedIn(){
+  try {
+    var raw = sessionStorage.getItem('vm_auth');
+    if (!raw) return;
+    var session = JSON.parse(raw);
+    if (session && session.loggedIn) {
+      window.location.replace('index.html');
+    }
+  } catch (e) {
+    sessionStorage.removeItem('vm_auth');
+  }
+})();
+</script>
+</body>
+</html>
